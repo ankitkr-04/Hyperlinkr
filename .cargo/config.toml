@@ -1,0 +1,11 @@
+[build]
+rustflags = [
+  "-Dwarnings",                       # Deny all warnings (enforce clean code)
+  "-Ctarget-cpu=native",             # Optimize for host CPU (8th Gen Intel)
+  "-Copt-level=3",                   # Maximum optimization (overrides profile for specific builds)
+]
+
+[alias]
+clippy-all = "clippy --all-targets --all-features -- -D warnings"  # Run clippy on all targets
+fmt-check = "fmt --check"          # Check formatting without modifying files
+test-all = "test --all-features"   # Run tests with all features

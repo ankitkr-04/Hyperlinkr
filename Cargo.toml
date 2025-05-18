@@ -1,0 +1,75 @@
+[package]
+name = "Hyperlinkr"
+version = "0.1.0"
+edition = "2024"
+description = "A URL shortener service built with Rust and Axum"
+license = "MIT"
+authors = ["Ankit Kumar <ak0182274@gmail.com>"]
+
+[lib]
+name = "hyperlinkr"
+path = "src/lib.rs"
+
+[dependencies]
+axum = "0.8.4"
+tokio = { version = "1.45.0", features = ["rt-multi-thread", "macros", "net", "time"] }
+serde = { version = "1.0", features = ["derive"] }
+validator = { version = "0.20", features = ["derive"] }
+chrono = { version = "0.4", features = ["serde"] }
+regex = "1.11"
+lazy_static = "1.5"
+mini-redis = "0.4.1"
+serde_json = "1.0"
+jsonwebtoken = "9.3.1"
+tracing = "0.1.41"
+tracing-subscriber = "0.3.19"
+anyhow = "1.0"
+thiserror = "2.0.12"
+dotenv = "0.15"
+moka = { version = "0.12.10", features = ["future"] }
+tower = "0.5.2"
+sled = "0.34"
+base62 = "2.2"
+config = "0.15"
+arrayvec = "0.7.6"
+
+
+[dev-dependencies]
+tokio-test = "0.4.4"
+test-case = "3.3.1"
+criterion = "0.6.0"
+reqwest = { version = "0.12", features = ["json"] }
+serial_test = "3.2"
+
+[[bench]]
+name = "codegen"
+harness = false
+
+[profile.dev]
+opt-level = 1                  # Enable some optimizations for dev (faster tests)
+debug = true
+overflow-checks = true
+incremental = true
+
+[profile.release]
+opt-level = "z"                # Optimize for binary size
+lto = true                     # Link Time Optimization
+codegen-units = 1             # Better optimization at the cost of compile time
+panic = "abort"                # Reduces binary size
+strip = true                   # Strips debug symbols
+
+# Linting configuration with clippy
+[lints.clippy]
+# Specific lint overrides
+unwrap_used = "allow"          # Allow unwrap() for prototyping (revisit for prod)
+expect_used = "allow"          # Allow expect() for prototyping
+missing_docs = "warn"          # Warn on missing documentation
+missing_errors_doc = "warn"    # Warn on missing error docs
+missing_panics_doc = "warn"    # Warn on missing panic docs
+too_many_arguments = "warn"    # Warn on functions with too many arguments
+
+# Additional strict rules for production readiness
+single_use_lifetimes = "deny"  # Prevent unnecessary lifetime annotations
+unnecessary_clone = "deny"     # Catch performance issues with cloning
+redundant_allocation = "deny"  # Prevent redundant heap allocations
+redundant_field_names = "deny" # Enforce concise struct initialization

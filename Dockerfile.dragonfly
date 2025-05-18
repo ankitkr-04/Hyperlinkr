@@ -1,0 +1,4 @@
+FROM docker.dragonflydb.io/dragonflydb/dragonfly
+
+# Minimal memory configuration for local development
+CMD ["sh", "-c", "dragonfly --maxmemory=${DRAGONFLY_MAXMEMORY:-2gb} --cache_mode=${DRAGONFLY_CACHE_MODE:-true} --snapshot_cron=${DRAGONFLY_SNAPSHOT_CRON:-'* * * * *'} --dbfilename=${DRAGONFLY_DBFILENAME:-dump} --bind=${DRAGONFLY_BIND:-0.0.0.0} --port=${DRAGONFLY_PORT:-6379}"]

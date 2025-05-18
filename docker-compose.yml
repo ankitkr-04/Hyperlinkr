@@ -1,0 +1,41 @@
+services:
+  dragonfly:
+    build:
+      context: .
+      dockerfile: Dockerfile.dragonfly
+    ports:
+      - "${DRAGONFLY_PORT}:${DRAGONFLY_PORT}"
+    deploy:
+      resources:
+        limits:
+          memory: ${DRAGONFLY_MEMORY_LIMIT:-3G}
+          cpus: ${DRAGONFLY_CPU_LIMIT:-1.00}
+    volumes:
+      - dragonfly_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 2s
+      retries: 3
+    environment:
+      - DRAGONFLY_MAXMEMORY
+      - DRAGONFLY_CACHE_MODE
+      - DRAGONFLY_SAVE_SCHEDULE
+      - DRAGONFLY_AOF
+      - DRAGONFLY_DBFILENAME
+      - DRAGONFLY_BIND
+      - DRAGONFLY_PORT
+
+  app:
+    build: .
+    ports:
+      - "${APP_PORT}:${APP_PORT}"
+    environment:
+      - RUST_LOG
+      - DATABASE_URL
+    depends_on:
+      dragonfly:
+        condition: service_healthy
+
+volumes:
+  dragonfly_data:

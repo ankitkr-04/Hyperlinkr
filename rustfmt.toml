@@ -1,0 +1,8 @@
+max_width = 80
+tab_spaces = 2
+hard_tabs = false
+edition = "2024"
+merge_imports = "Auto"
+reorder_imports = true
+format_strings = true
+wrap_comments = true
