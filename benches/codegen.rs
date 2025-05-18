@@ -1,5 +1,5 @@
 use criterion::{Criterion, criterion_group, criterion_main};
-use hyperlinkr::services::codegen::CodeGenerator;
+use hyperlinkr::services::codegen::generator::CodeGenerator;
 use std::hint::black_box;
 use std::sync::Arc;
 use tokio::task;

@@ -9,6 +9,9 @@ pub struct Settings {
     pub database_url: String,
     pub base_url: String,
     pub app_port: u16,
+    pub dragonfly_host: String,
+    pub dragonfly_port: u16,
+     
 }
 
 pub fn load() -> Result<Settings, ConfigError> {

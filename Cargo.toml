@@ -32,6 +32,10 @@ sled = "0.34"
 base62 = "2.2"
 config = "0.15"
 arrayvec = "0.7.6"
+parking_lot = "0.12.3"
+prometheus = "0.14.0"
+fastbloom ={ version ="0.11.0", features = ["serde"] }
+futures = "0.3"
 
 
 [dev-dependencies]
@@ -50,6 +54,10 @@ opt-level = 1                  # Enable some optimizations for dev (faster tests
 debug = true
 overflow-checks = true
 incremental = true
+
+[profile.bench]
+debug = true
+opt-level = 3               # Optimize for speed
 
 [profile.release]
 opt-level = "z"                # Optimize for binary size
