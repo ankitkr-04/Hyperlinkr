@@ -10,6 +10,9 @@ authors = ["Ankit Kumar <ak0182274@gmail.com>"]
 name = "hyperlinkr"
 path = "src/lib.rs"
 
+[features]
+libnuma = ["libnuma-sys"]
+
 [dependencies]
 axum = "0.8.4"
 tokio = { version = "1.45.0", features = ["rt-multi-thread", "macros", "net", "time"] }
@@ -18,7 +21,7 @@ validator = { version = "0.20", features = ["derive"] }
 chrono = { version = "0.4", features = ["serde"] }
 regex = "1.11"
 lazy_static = "1.5"
-mini-redis = "0.4.1"
+redis = { version = "0.31", features = ["aio", "tokio-comp", "connection-manager", "bb8"] }
 serde_json = "1.0"
 jsonwebtoken = "9.3.1"
 tracing = "0.1.41"
@@ -26,7 +29,7 @@ tracing-subscriber = "0.3.19"
 anyhow = "1.0"
 thiserror = "2.0.12"
 dotenv = "0.15"
-moka = { version = "0.12.10", features = ["future"] }
+moka = { version = "0.12.10", features = ["future", "sync"] }
 tower = "0.5.2"
 sled = "0.34"
 base62 = "2.2"
@@ -36,6 +39,10 @@ parking_lot = "0.12.3"
 prometheus = "0.14.0"
 fastbloom ={ version ="0.11.0", features = ["serde"] }
 futures = "0.3"
+libnuma-sys = {version ="0.0.9", optional = true}
+bb8-redis = "0.23.0"
+crossbeam-queue = "0.3.12"
+bb8 = '0.9'
 
 
 [dev-dependencies]
