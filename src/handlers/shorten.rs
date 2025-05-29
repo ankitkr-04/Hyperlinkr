@@ -1,23 +1,18 @@
-use axum::{extract::{Json, Extension}, response::IntoResponse};
+use axum::{extract::{Json, Extension}, response::IntoResponse, routing::post, Router};
 use validator::Validate;
 use std::sync::Arc;
-use crate::{services::{codegen::generator::CodeGenerator, cache::CacheService, analytics::AnalyticsService}, types::{ShortenRequest, ShortenResponse}, errors::AppError};
+use crate::{services::{codegen::generator::CodeGenerator, cache::CacheService, analytics::AnalyticsService}, types::{ShortenRequest, ShortenResponse}, errors::AppError, config::settings::Settings};
 use tracing::info;
 use redis::AsyncCommands;
 
 pub async fn shorten_handler(
-    Json(req): Json<ShortenRequest>,
+    Json(mut req): Json<ShortenRequest>,
     Extension(config): Extension<Arc<Settings>>,
     Extension(cache): Extension<Arc<CacheService>>,
     Extension(analytics): Extension<Arc<AnalyticsService>>,
     Extension(codegen): Extension<Arc<CodeGenerator>>,
 ) -> Result<impl IntoResponse, AppError> {
     req.validate().map_err(AppError::Validation)?;
-
-    // Sanitize URL
-    if req.url.starts_with("javascript:") || req.url.contains("<script") {
-        return Err(AppError::BadRequest("Invalid URL".to_string()));
-    }
 
     // Generate short code
     let code = match req.custom_alias {
@@ -35,7 +30,7 @@ pub async fn shorten_handler(
     // Store in cache and database
     cache.l1.insert(code.clone(), req.url.clone());
     cache.l2.insert(code.clone(), req.url.clone()).await;
-    cache.bloom.write().insert(&code);
+    cache.bloom.read().insert(&code);
     let mut conn = cache.db_pool.get().await.map_err(|_| AppError::RedisConnection)?;
     conn.set_ex(&code, &req.url, config.cache.ttl_seconds)
         .await
@@ -61,38 +56,46 @@ pub async fn shorten_handler(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::http::Request;
+    use axum::http::{Request, StatusCode, header};
     use axum::body::Body;
     use tower::ServiceExt;
     use std::sync::Arc;
-    use crate::services::{cache::CacheService, analytics::AnalyticsService, codegen::generator::CodeGenerator};
-    use crate::config::settings::Settings;
+    use crate::types::ShortenRequest;
 
     #[tokio::test]
     async fn test_shorten_handler() {
         let config = Arc::new(Settings::default());
-        let cache = Arc::new(CacheService::new(&config).await);
+        let cache = Arc::new(CacheService::new(&config).await.unwrap());
         let analytics = Arc::new(AnalyticsService::new(config.analytics.clone()));
         let codegen = Arc::new(CodeGenerator::new(&config));
-        let app = shorten_handler
+
+        let app = Router::new()
+            .route("/shorten", post(shorten_handler))
             .layer(Extension(config))
             .layer(Extension(cache))
             .layer(Extension(analytics))
             .layer(Extension(codegen));
+
         let request = ShortenRequest {
             url: "https://example.com".to_string(),
             custom_alias: None,
             expiration_date: None,
         };
+
         let response = app
-            .oneshot(Request::builder()
-                .method("POST")
-                .uri("/shorten")
-                .header("content-type", "application/json")
-                .body(Body::from(serde_json::to_string(&request).unwrap()))
-                .unwrap())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/shorten")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(serde_json::to_string(&request).unwrap()))
+                    .unwrap()
+            )
             .await
             .unwrap();
-        assert_eq!(response.status(), axum::http::StatusCode::OK);
+
+        assert_eq!(response.status(), StatusCode::OK);
     }
 }
+
+

@@ -11,16 +11,12 @@ pub async fn metrics_handler() -> impl IntoResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::http::Request;
-    use axum::body::Body;
-    use tower::ServiceExt;
+    use axum::http::StatusCode;
 
     #[tokio::test]
     async fn test_metrics_handler() {
-        let response = metrics_handler()
-            .oneshot(Request::builder().uri("/metrics").body(Body::empty()).unwrap())
-            .await
-            .unwrap();
-        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let response = metrics_handler().await.into_response();
+        let (status, _body) = response.into_parts();
+        assert_eq!(status, StatusCode::OK);
     }
 }

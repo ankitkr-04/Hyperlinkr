@@ -13,24 +13,33 @@ pub struct CacheConfig {
     pub bloom_bits: usize,
     #[validate(range(min = 1000, message = "Bloom expected items must be at least 1000"))]
     pub bloom_expected: usize,
+    #[validate(range(min = 8, message = "Bloom shards must be at least 8"))]
+    pub bloom_shards: usize,
     #[validate(range(min = 128, message = "Bloom block size must be at least 128"))]
     pub bloom_block_size: usize,
     #[validate(range(min = 8, message = "Redis pool size must be at least 8"))]
     pub redis_pool_size: u32,
     #[validate(range(min = 60, message = "Cache TTL must be at least 60 seconds"))]
     pub ttl_seconds: u64,
+    #[validate(range(min = 3, message = "Max failures must be at least 3"))]
+    pub max_failures: u32,
+    #[validate(range(min = 10, message = "Retry interval must be at least 10 seconds"))]
+    pub retry_interval_secs: u64,
 }
 
 impl Default for CacheConfig {
     fn default() -> Self {
         Self {
-            l1_capacity: 10000,
-            l2_capacity: 100000,
-            bloom_bits: 1048576,
-            bloom_expected: 100000,
+            l1_capacity: 10_000,
+            l2_capacity: 100_000,
+            bloom_bits: 10_485_760, // ~10MB
+            bloom_expected: 1_000_000,
+            bloom_shards: 8,
             bloom_block_size: 128,
-            redis_pool_size: 32,
+            redis_pool_size: 128, // Increased for 1M req/sec
             ttl_seconds: 3600,
+            max_failures: 10,
+            retry_interval_secs: 30,
         }
     }
 }
@@ -90,7 +99,7 @@ impl Default for AnalyticsConfig {
     fn default() -> Self {
         Self {
             flush_interval_ms: 200,
-            batch_size: 10000,
+            batch_size: 10_000,
         }
     }
 }
@@ -99,16 +108,12 @@ impl Default for AnalyticsConfig {
 pub struct Settings {
     #[validate(length(min = 1, message = "Environment must not be empty"))]
     pub environment: String,
-    #[validate(url(message = "Invalid Redis URL"))]
-    pub database_url: String,
+    #[validate(length(min = 1, message = "At least one Redis URL must be provided"))]
+    pub database_urls: Vec<String>,
     #[validate(url(message = "Invalid base URL"))]
     pub base_url: String,
     #[validate(range(min = 1024, max = 65535, message = "Port must be between 1024 and 65535"))]
     pub app_port: u16,
-    #[validate(length(min = 1, message = "Dragonfly host must not be empty"))]
-    pub dragonfly_host: String,
-    #[validate(range(min = 1024, max = 65535, message = "Dragonfly port must be between 1024 and 65535"))]
-    pub dragonfly_port: u16,
     #[validate(nested)]
     pub cache: CacheConfig,
     #[validate(nested)]
@@ -123,11 +128,9 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             environment: "development".to_string(),
-            database_url: "redis://localhost:6379".to_string(),
+            database_urls: vec!["redis://localhost:6379".to_string()],
             base_url: "http://localhost:3000".to_string(),
             app_port: 3000,
-            dragonfly_host: "localhost".to_string(),
-            dragonfly_port: 6379,
             cache: CacheConfig::default(),
             rate_limit: RateLimitConfig::default(),
             codegen: CodeGenConfig::default(),
@@ -136,6 +139,37 @@ impl Default for Settings {
     }
 }
 
+// Manual validation for database_urls
+impl Validate for Settings {
+    fn validate(&self) -> Result<(), validator::ValidationErrors> {
+        let mut errors = validator::ValidationErrors::new();
+
+        // Validate struct fields using derive
+        if let Err(e) = <Self as validator::Validate>::validate_derived(self) {
+            errors = e;
+        }
+
+        // Manually validate each URL in database_urls
+        for (idx, url) in self.database_urls.iter().enumerate() {
+            if validator::validate_url(url).is_err() {
+                errors.add(
+                    "database_urls",
+                    validator::ValidationError {
+                        code: std::borrow::Cow::from("url"),
+                        message: Some(std::borrow::Cow::from(format!("Invalid Redis URL at index {}", idx))),
+                        params: std::collections::HashMap::new(),
+                    },
+                );
+            }
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+}
 pub fn load() -> Result<Settings, ConfigError> {
     let env = env::var("ENVIRONMENT").unwrap_or_else(|_| "development".to_string());
     let config_file = match env.as_str() {
@@ -148,24 +182,25 @@ pub fn load() -> Result<Settings, ConfigError> {
         .add_source(File::with_name("config.toml").required(false))
         .add_source(Environment::with_prefix("HYPERLINKR").separator("_").try_parsing(true))
         .set_default("environment", env)?
-        .set_default("database_url", "redis://localhost:6379")?
+        .set_default("database_urls", vec!["redis://localhost:6379"])?
         .set_default("base_url", "http://localhost:3000")?
         .set_default("app_port", 3000)?
-        .set_default("dragonfly_host", "localhost")?
-        .set_default("dragonfly_port", 6379)?
-        .set_default("cache.l1_capacity", 10000)?
-        .set_default("cache.l2_capacity", 100000)?
-        .set_default("cache.bloom_bits", 1048576)?
-        .set_default("cache.bloom_expected", 100000)?
+        .set_default("cache.l1_capacity", 10_000)?
+        .set_default("cache.l2_capacity", 100_000)?
+        .set_default("cache.bloom_bits", 10_485_760)?
+        .set_default("cache.bloom_expected", 1_000_000)?
+        .set_default("cache.bloom_shards", 8)?
         .set_default("cache.bloom_block_size", 128)?
-        .set_default("cache.redis_pool_size", 32)?
+        .set_default("cache.redis_pool_size", 128)?
         .set_default("cache.ttl_seconds", 3600)?
+        .set_default("cache.max_failures", 10)?
+        .set_default("cache.retry_interval_secs", 30)?
         .set_default("rate_limit.shorten_requests_per_minute", 10)?
         .set_default("rate_limit.redirect_requests_per_minute", 1000)?
         .set_default("codegen.shard_bits", 12)?
         .set_default("codegen.max_attempts", 5)?
         .set_default("analytics.flush_interval_ms", 200)?
-        .set_default("analytics.batch_size", 10000)?
+        .set_default("analytics.batch_size", 10_000)?
         .build()?;
 
     let settings: Settings = config.try_deserialize()?;

@@ -33,11 +33,11 @@ impl DatabaseClient {
             .get(key)
             .await
             .map_err(|_| {
-                metrics::DB_ERRORS.with_label_values(&["get"]).inc();
+                metrics::DB_ERRORS.get().unwrap().with_label_values(&["get"]).inc();
                 AppError::RedisOperation("Redis GET failed".to_string())
             })?;
         metrics::DB_LATENCY
-            .with_label_values(&["get"])
+            .get().unwrap().with_label_values(&["get"])
             .observe(start.elapsed().as_secs_f64());
         data
             .map(|b| String::from_utf8_lossy(&b).into_owned())
@@ -53,11 +53,11 @@ impl DatabaseClient {
         conn.set_ex(key, value, ttl_seconds)
             .await
             .map_err(|_| {
-                metrics::DB_ERRORS.with_label_values(&["set"]).inc();
+                metrics::DB_ERRORS.get().unwrap().with_label_values(&["set"]).inc();
                 AppError::RedisOperation("Redis SET failed".to_string())
             })?;
         metrics::DB_LATENCY
-            .with_label_values(&["set"])
+            .get().unwrap().with_label_values(&["set"])
             .observe(start.elapsed().as_secs_f64());
         Ok(())
     }
