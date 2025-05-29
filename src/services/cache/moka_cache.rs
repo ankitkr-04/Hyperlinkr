@@ -7,10 +7,10 @@ pub struct MokaCache {
 }
 
 impl MokaCache {
-    pub fn new(capacity: usize) -> Self {
+    pub fn new(capacity: usize, ttl_seconds: u64) -> Self {
         let inner = Cache::builder()
             .max_capacity(capacity as u64)
-            .time_to_idle(Duration::from_secs(60))
+            .time_to_live(Duration::from_secs(ttl_seconds))
             .eviction_policy(moka::policy::EvictionPolicy::tiny_lfu())
             .build();
         Self { inner }
@@ -20,9 +20,9 @@ impl MokaCache {
         let start = std::time::Instant::now();
         let val = self.inner.get(key).await;
         if val.is_some() {
-            metrics::CACHE_HITS.with_label_values(&["l1"]).inc();
+            metrics::CACHE_HITS.with_label_values(&["l2"]).inc();
             metrics::CACHE_LATENCY
-                .with_label_values(&["l1"])
+                .with_label_values(&["l2"])
                 .observe(start.elapsed().as_secs_f64());
         }
         val
@@ -36,3 +36,47 @@ impl MokaCache {
         self.inner.invalidate(key).await;
     }
 }
+
+// use dashmap::DashMap;
+// use std::sync::Arc;
+// use crate::config::settings::Settings;
+// use prometheus::{IntCounter, Histogram};
+
+// lazy_static! {
+//     static ref CACHE_HITS: IntCounter = prometheus::register_int_counter!(
+//         "cache_hits_total",
+//         "Total number of cache hits"
+//     ).unwrap();
+//     static ref CACHE_LATENCY: Histogram = prometheus::register_histogram!(
+//         "cache_latency_seconds",
+//         "Cache operation latency in seconds"
+//     ).unwrap();
+// }
+
+// // #[derive(Clone)]
+// pub struct MokaCache {
+//     inner: Arc<DashMap<String, String>>,
+// }
+
+// impl MokaCache {
+//     pub fn new(config: &Settings) -> Self {
+//         let inner = Arc::new(DashMap::with_capacity(config.cache.l2_capacity));
+//         Self { inner }
+//     }
+
+//     pub fn get(&self, key: &str) -> Option<String> {
+//         let timer = CACHE_LATENCY.start_timer();
+//         let result = self.inner.get(key).map(|v| v.clone());
+//         if result.is_some() {
+//             CACHE_HITS.inc();
+//         }
+//         timer.stop_and_record();
+//         result
+//     }
+
+//     pub async fn insert(&self, key: String, value: String) {
+//         let timer = CACHE_LATENCY.start_timer();
+//         self.inner.insert(key, value);
+//         timer.stop_and_record();
+//     }
+// }

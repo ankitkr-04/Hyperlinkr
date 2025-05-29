@@ -1,6 +1,8 @@
 use crossbeam_queue::SegQueue;
 use tokio::sync::Mutex;
 use std::sync::Arc;
+use crate::config::settings::AnalyticsConfig;
+use tracing::error;
 
 pub struct AnalyticsService {
     queue: Arc<SegQueue<(String, u64)>>,
@@ -8,9 +10,9 @@ pub struct AnalyticsService {
 }
 
 impl AnalyticsService {
-    pub fn new(db_pool: bb8::Pool<mini_redis::client::ClientManager>) -> Self {
+    pub fn new(config: AnalyticsConfig) -> Self {
         let queue = Arc::new(SegQueue::new());
-        let flush_task = Self::start_flush_task(Arc::clone(&queue), db_pool);
+        let flush_task = Self::start_flush_task(Arc::clone(&queue), config);
         Self {
             queue,
             flush_task: Mutex::new(Some(flush_task)),
@@ -23,16 +25,21 @@ impl AnalyticsService {
 
     fn start_flush_task(
         queue: Arc<SegQueue<(String, u64)>>,
-        db_pool: bb8::Pool<mini_redis::client::ClientManager>,
+        config: AnalyticsConfig,
     ) -> tokio::task::JoinHandle<()> {
+        let db_pool = bb8::Pool::builder()
+            .max_size(config.redis_pool_size)
+            .build(RedisConnectionManager::new(&config.database_url).unwrap())
+            .await
+            .unwrap();
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(std::time::Duration::from_millis(200));
+            let mut interval = tokio::time::interval(std::time::Duration::from_millis(config.flush_interval_ms));
             loop {
                 interval.tick().await;
                 let mut batch = Vec::new();
                 while let Some((code, ts)) = queue.pop() {
                     batch.push((code, ts));
-                    if batch.len() >= 10_000 {
+                    if batch.len() >= config.batch_size {
                         break;
                     }
                 }
@@ -42,7 +49,9 @@ impl AnalyticsService {
                         for (code, ts) in batch {
                             pipe.zadd(format!("stats:{}", code), ts, ts);
                         }
-                        let _ = pipe.query_async(&mut db).await;
+                        if let Err(e) = pipe.query_async(&mut db).await {
+                            error!("Failed to flush analytics batch: {}", e);
+                        }
                     }
                 }
             }

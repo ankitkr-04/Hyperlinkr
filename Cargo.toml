@@ -15,7 +15,7 @@ libnuma = ["libnuma-sys"]
 
 [dependencies]
 axum = "0.8.4"
-tokio = { version = "1.45.0", features = ["rt-multi-thread", "macros", "net", "time"] }
+tokio = { version = "1.45.0", features = ["rt-multi-thread", "macros", "net", "time", "signal"] }
 serde = { version = "1.0", features = ["derive"] }
 validator = { version = "0.20", features = ["derive"] }
 chrono = { version = "0.4", features = ["serde"] }
@@ -43,6 +43,8 @@ libnuma-sys = {version ="0.0.9", optional = true}
 bb8-redis = "0.23.0"
 crossbeam-queue = "0.3.12"
 bb8 = '0.9'
+async-trait = "0.1.88"
+once_cell = "1.21"
 
 
 [dev-dependencies]

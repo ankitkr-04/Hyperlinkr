@@ -1,16 +1,14 @@
 use fastbloom::BloomFilter;
 
-
-const BLOOM_BLOCK_SIZE: usize = 128;
 #[derive(Clone)]
 pub struct CacheBloom {
-    inner: BloomFilter<BLOOM_BLOCK_SIZE>,
+    inner: BloomFilter,
 }
 
 impl CacheBloom {
-    pub fn new(size: usize, expected: usize) -> Self {
+    pub fn new(size: usize, expected: usize, _block_size: usize) -> Self {
         let inner = BloomFilter::with_num_bits(size)
-            .block_size_128()
+            .block_size_512()
             .expected_items(expected);
         Self { inner }
     }
@@ -32,7 +30,7 @@ mod tests {
 
     #[test]
     fn test_bloom_filter() {
-        let mut bloom = CacheBloom::new(1000, 100);
+        let mut bloom = CacheBloom::new(1000, 100, 128);
         bloom.insert("test_key");
         assert!(bloom.contains("test_key"));
         assert!(!bloom.contains("missing_key"));

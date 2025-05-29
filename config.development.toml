@@ -1,0 +1,21 @@
+environment = "development"
+database_url = "redis://localhost:6379"
+base_url = "http://localhost:3000"
+app_port = 3000
+dragonfly_host = "localhost"
+dragonfly_port = 6379
+
+[cache]
+l1_capacity = 10000
+l2_capacity = 100000
+bloom_bits = 1048576
+bloom_expected = 100000
+redis_pool_size = 32
+
+[rate_limit]
+shorten_requests_per_minute = 10
+redirect_requests_per_minute = 1000
+
+[codegen]
+shard_bits = 12
+max_attempts = 5
