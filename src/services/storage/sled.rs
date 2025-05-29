@@ -1,20 +1,19 @@
+use async_trait::async_trait;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use sled::Db;
 use crate::errors::AppError;
-use async_trait::async_trait;
-use crate::services::storage::Storage;
+use super::storage::Storage;
 
+// Note: SledStorage is for testing only; use DatabaseClient for production
 pub struct SledStorage {
     db: Arc<Mutex<Db>>,
 }
 
 impl SledStorage {
     pub fn new(path: &str) -> Self {
-        let db = sled::open(path).unwrap();
-        Self {
-            db: Arc::new(Mutex::new(db)),
-        }
+        let db = sled::open(path).expect("Failed to open sled database");
+        Self { db: Arc::new(Mutex::new(db)) }
     }
 }
 
@@ -28,9 +27,17 @@ impl Storage for SledStorage {
             .ok_or(AppError::NotFound("Key not found".to_string()))
     }
 
-    async fn set_ex(&self, key: &str, value: &str, _ttl_seconds: u64) -> Result<(), AppError> {
+    async fn set_ex(&self, key: &str, value: &str, ttl_seconds: u64) -> Result<(), AppError> {
         let db = self.db.lock().await;
         db.insert(key, value.as_bytes())
+            .map_err(|e| AppError::Sled(e))?;
+        // Note: sled does not support TTL natively; consider cleanup task for production
+        Ok(())
+    }
+
+    async fn zadd(&self, key: &str, score: u64, member: u64) -> Result<(), AppError> {
+        let db = self.db.lock().await;
+        db.insert(format!("{}:{}", key, member), score.to_le_bytes())
             .map_err(|e| AppError::Sled(e))?;
         Ok(())
     }

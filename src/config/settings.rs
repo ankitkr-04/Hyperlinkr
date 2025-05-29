@@ -84,6 +84,9 @@ pub struct AnalyticsConfig {
     pub flush_interval_ms: u64,
     #[validate(range(min = 1000, message = "Batch size must be at least 1000"))]
     pub batch_size: usize,
+
+    pub max_batch_size_ms : Option<u64>,
+    pub max_batch_size: Option<usize>,
 }
 
 impl AnalyticsConfig {
@@ -91,6 +94,8 @@ impl AnalyticsConfig {
         Self {
             flush_interval_ms: self.flush_interval_ms,
             batch_size: self.batch_size,
+            max_batch_size_ms: self.max_batch_size_ms,
+            max_batch_size: self.max_batch_size,
         }
     }
 }
@@ -100,6 +105,8 @@ impl Default for AnalyticsConfig {
         Self {
             flush_interval_ms: 200,
             batch_size: 10_000,
+            max_batch_size_ms: Some(1000),
+            max_batch_size: Some(10000),
         }
     }
 }
@@ -201,6 +208,8 @@ pub fn load() -> Result<Settings, ConfigError> {
         .set_default("codegen.max_attempts", 5)?
         .set_default("analytics.flush_interval_ms", 200)?
         .set_default("analytics.batch_size", 10_000)?
+        .set_default("analytics.max_batch_size_ms", Some(1000))?
+        .set_default("analytics.max_batch_size", Some(10000))?
         .build()?;
 
     let settings: Settings = config.try_deserialize()?;
