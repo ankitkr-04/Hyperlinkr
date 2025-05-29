@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use crate::config::settings::Settings;
 use crate::services::cache::circuit_breaker::CircuitBreaker;
-use crate::services::cache::metrics;
+use crate::services::metrics;
 use crate::services::storage::dragonfly::DatabaseClient;
 use crate::services::storage::storage::Storage;
 use tracing::{error, info};

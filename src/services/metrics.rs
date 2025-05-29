@@ -68,3 +68,15 @@ pub fn record_db_latency(op: &'static str, start: Instant) {
         db_latency.with_label_values(&[op]).observe(elapsed);
     }
 }
+
+
+pub fn record_db_error(op: &'static str) {
+    if let Some(db_errors) = DB_ERRORS.get() {
+        db_errors.with_label_values(&[op]).inc();
+    }
+}
+pub fn record_analytics_dropped() {
+    if let Some(analytics_dropped) = ANALYTICS_DROPPED.get() {
+        analytics_dropped.inc();
+    }
+}

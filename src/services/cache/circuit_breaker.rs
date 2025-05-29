@@ -15,29 +15,15 @@ struct NodeState {
 
 pub struct CircuitBreaker {
     state: RwLock<HashMap<String, NodeState>>,
+    nodes: Vec<String>,
     retry_interval: Duration,
     max_failures: u32,
 }
 
-/// Implements a circuit breaker pattern for managing the health of a set of nodes.
-/// 
-/// # Methods
-/// 
-/// - `new(nodes, max_failures, retry_interval)`: Constructs a new `CircuitBreaker` with the given nodes, maximum allowed failures before tripping, and the retry interval for unhealthy nodes.
-/// - `get_healthy_node(&self) -> Option<String>`: Asynchronously returns a randomly selected healthy node, or a node eligible for retry if its retry interval has elapsed. Returns `None` if no nodes are available.
-/// - `record_failure(&self, node: &str)`: Asynchronously records a failure for the specified node, updating its failure count and marking it as unhealthy if the maximum failures threshold is reached.
-/// - `add_node(&self, node: String)`: Asynchronously adds a new node to the circuit breaker, initializing its state as healthy.
-/// - `reset_unhealthy(&self)`: Asynchronously resets the state of unhealthy nodes whose retry interval has elapsed, marking them as healthy and resetting their failure count.
-/// 
-/// # Example
-/// ```
-/// let cb = CircuitBreaker::new(vec!["node1".into(), "node2".into()], 3, Duration::from_secs(30));
-/// // Use cb.get_healthy_node().await, cb.record_failure("node1").await, etc.
-/// ```
 impl CircuitBreaker {
     pub fn new(nodes: Vec<String>, max_failures: u32, retry_interval: Duration) -> Self {
-        let state = nodes.into_iter().map(|node| {
-            (node, NodeState {
+        let state = nodes.iter().map(|node| {
+            (node.clone(), NodeState {
                 failure_count: 0,
                 last_failure: Instant::now() - retry_interval,
                 is_healthy: true,
@@ -45,6 +31,7 @@ impl CircuitBreaker {
         }).collect();
         Self {
             state: RwLock::new(state),
+            nodes,
             retry_interval,
             max_failures,
         }
@@ -95,5 +82,9 @@ impl CircuitBreaker {
                 info!("Reset node {}", node);
             }
         }
+    }
+
+    pub fn get_node_index(&self, node: &str) -> Option<usize> {
+        self.nodes.iter().position(|n| n == node)
     }
 }

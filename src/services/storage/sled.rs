@@ -41,4 +41,47 @@ impl Storage for SledStorage {
             .map_err(|e| AppError::Sled(e))?;
         Ok(())
     }
+
+    async fn rate_limit(&self, key: &str, limit: u64, window_secs: i64) -> Result<bool, AppError> {
+        let db = self.db.lock().await;
+        let current_time = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|e| AppError::Internal(e.to_string()))?
+            .as_secs() as i64;
+
+        let count_key = format!("{}:count", key);
+        let timestamp_key = format!("{}:timestamp", key);
+
+        // Get current count and timestamp
+        let count: u64 = db.get(&count_key)
+            .map_err(|e| AppError::Sled(e))?
+            .and_then(|bytes| String::from_utf8(bytes.to_vec()).ok())
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
+
+        let last_timestamp: i64 = db.get(&timestamp_key)
+            .map_err(|e| AppError::Sled(e))?
+            .and_then(|bytes| String::from_utf8(bytes.to_vec()).ok())
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
+
+        // Check if we are still within the window
+        if current_time - last_timestamp > window_secs {
+            // Reset count and timestamp
+            db.insert(&count_key, "1".as_bytes())
+                .map_err(|e| AppError::Sled(e))?;
+            db.insert(&timestamp_key, current_time.to_string().as_bytes())
+                .map_err(|e| AppError::Sled(e))?;
+            return Ok(true);
+        }
+
+        // Check if we can increment the count
+        if count < limit {
+            db.insert(&count_key, (count + 1).to_string().as_bytes())
+                .map_err(|e| AppError::Sled(e))?;
+            return Ok(true);
+        }
+
+        Ok(false) // Rate limit exceeded
+    }
 }

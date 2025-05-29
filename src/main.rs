@@ -1,7 +1,7 @@
 use axum::{Router, Extension};
 use std::sync::Arc;
 use bb8_redis::RedisConnectionManager;
-use hyperlinkr::{config::settings::{Settings, load}, services::{cache::CacheService, codegen::generator::CodeGenerator, analytics::AnalyticsService}, handlers::{shorten::shorten_handler, redirect::redirect_handler, metrics::metrics_handler}, middleware::rate_limit::rate_limit_middleware};
+use hyperlinkr::{config::settings::{Settings, load}, services::{cache::cache::CacheService, codegen::generator::CodeGenerator, analytics::AnalyticsService}, handlers::{shorten::shorten_handler, redirect::redirect_handler, metrics::metrics_handler}, middleware::rate_limit::rate_limit_middleware};
 use tracing::info;
 use tokio::signal;
 

@@ -1,6 +1,6 @@
 use moka::future::Cache;
 use std::time::Duration;
-use crate::services::cache::metrics;
+use crate::services::metrics;
 
 pub struct L2Cache {
     pub inner: Cache<String, String>,

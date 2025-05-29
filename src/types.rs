@@ -3,37 +3,13 @@ use serde::{Deserialize, Serialize};
 use validator::{Validate, ValidationError};
 use once_cell::sync::Lazy;
 use chrono::{DateTime, Utc};
+use crate::clock::{Clock, SystemClock};
+use crate::clock::MockClock;
 
 static ALPHANUMERIC_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"^[a-zA-Z0-9]+$").unwrap());
 static MALICIOUS_URL_REGEX: Lazy<Regex> = Lazy::new(|| 
     Regex::new(r"(?i)^javascript:|^data:|<script|eval\(|onload=").unwrap()
 );
-
-pub trait Clock {
-    fn now(&self) -> DateTime<Utc>;
-}
-
-pub struct SystemClock;
-impl Clock for SystemClock {
-    fn now(&self) -> DateTime<Utc> {
-        Utc::now()
-    }
-}
-
-#[cfg(test)]
-pub struct MockClock(chrono::DateTime<chrono::Utc>);
-#[cfg(test)]
-impl MockClock {
-    pub fn new(time: chrono::DateTime<chrono::Utc>) -> Self {
-        Self(time)
-    }
-}
-#[cfg(test)]
-impl Clock for MockClock {
-    fn now(&self) -> chrono::DateTime<chrono::Utc> {
-        self.0
-    }
-}
 
 fn validate_url(url: &str) -> Result<(), ValidationError> {
     if url.len() > 2048 {

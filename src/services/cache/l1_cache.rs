@@ -1,6 +1,6 @@
 use std::sync::Arc;
 use moka::future::Cache;
-use crate::services::cache::metrics;
+use crate::services::metrics;
 
 #[derive(Clone)]
 pub struct L1Cache {
