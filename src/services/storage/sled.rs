@@ -27,7 +27,7 @@ impl Storage for SledStorage {
             .ok_or(AppError::NotFound("Key not found".to_string()))
     }
 
-    async fn set_ex(&self, key: &str, value: &str, ttl_seconds: u64) -> Result<(), AppError> {
+    async fn set_ex(&self, key: &str, value: &str, _ttl_seconds: u64) -> Result<(), AppError> {
         let db = self.db.lock().await;
         db.insert(key, value.as_bytes())
             .map_err(|e| AppError::Sled(e))?;
@@ -37,7 +37,7 @@ impl Storage for SledStorage {
 
     async fn zadd(&self, key: &str, score: u64, member: u64) -> Result<(), AppError> {
         let db = self.db.lock().await;
-        db.insert(format!("{}:{}", key, member), score.to_le_bytes())
+        db.insert(format!("{}:{}", key, member), score.to_le_bytes().to_vec())
             .map_err(|e| AppError::Sled(e))?;
         Ok(())
     }

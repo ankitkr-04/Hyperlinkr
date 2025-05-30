@@ -1,36 +1,60 @@
-
-use axum::{extract::{Json, Extension}, response::IntoResponse, routing::post, Router};
-use validator::Validate;
+use axum::{
+    extract::{Json, State},
+    response::IntoResponse,
+};
 use std::sync::Arc;
-use crate::{services::{codegen::generator::CodeGenerator, cache::cache::CacheService, analytics::AnalyticsService}, types::{ShortenRequest, ShortenResponse}, errors::AppError, config::settings::Settings};
 use tracing::info;
-use crate::clock::{SystemClock, Clock};
+use validator::Validate;
 
+use crate::{
+    clock::{Clock, SystemClock},
+    config::settings::Settings,
+    errors::AppError,
+    services::{
+        analytics::AnalyticsService,
+        cache::cache::CacheService,
+        codegen::generator::CodeGenerator,
+        storage::dragonfly::DatabaseClient,
+    },
+    types::{ShortenRequest, ShortenResponse},
+};
+
+#[derive(Clone)]
+pub struct AppState {
+    pub config: Arc<Settings>,
+    pub cache: Arc<CacheService>,
+    pub analytics: Arc<AnalyticsService>,
+    pub codegen: Arc<CodeGenerator>,
+    pub clock: Arc<SystemClock>,
+    pub rl_db: Arc<DatabaseClient>,
+}
+
+#[axum::debug_handler]
 pub async fn shorten_handler(
-    Json(mut req): Json<ShortenRequest>,
-    Extension(config): Extension<Arc<Settings>>,
-    Extension(cache): Extension<Arc<CacheService>>,
-    Extension(analytics): Extension<Arc<AnalyticsService>>,
-    Extension(codegen): Extension<Arc<CodeGenerator>>,
-    Extension(clock): Extension<Arc<dyn Clock + Send + Sync>>,
+    State(state): State<AppState>,
+    Json(req): Json<ShortenRequest>,
 ) -> Result<impl IntoResponse, AppError> {
-    req.validate().map_err(|e| AppError::Validation(e))?;
+    req.validate().map_err(AppError::Validation)?;
 
     let code = match req.custom_alias {
         Some(alias) => alias,
-        None => codegen.next().map_err(|e| AppError::CodeGen(e))?.to_string(),
+        None => state
+            .codegen
+            .next()
+            .map_err(AppError::CodeGen)?
+            .to_string(),
     };
 
     if let Some(expiration) = req.expiration_date {
-        if clock.now() > expiration {
+        if state.clock.now() > expiration {
             return Err(AppError::Expired);
         }
     }
 
-    if cache.contains_key(&code) {
-        if let Ok(existing_url) = cache.get(&code).await {
+    if state.cache.contains_key(&code) {
+        if let Ok(existing_url) = state.cache.get(&code).await {
             if existing_url == req.url {
-                let short_url = format!("{}/redirect/{}", config.base_url, code);
+                let short_url = format!("{}/redirect/{}", state.config.base_url, code);
                 return Ok(Json(ShortenResponse {
                     short_url,
                     code,
@@ -40,10 +64,11 @@ pub async fn shorten_handler(
         }
     }
 
-    cache.insert(code.clone(), req.url.clone()).await?;
+    state.cache.insert(code.clone(), req.url.clone()).await?;
 
-    let short_url = format!("{}/redirect/{}", config.base_url, code);
+    let short_url = format!("{}/redirect/{}", state.config.base_url, code);
     info!("Shortened URL: {} -> {}", req.url, short_url);
+
     Ok(Json(ShortenResponse {
         short_url,
         code,
@@ -51,13 +76,30 @@ pub async fn shorten_handler(
     }))
 }
 
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::{http::{Request, StatusCode, header}, body::Body};
-    use tower::ServiceExt;
+    use axum::{
+        body::Body,
+        http::{header, Request, StatusCode},
+        routing::post,
+        Router,
+    };
     use std::sync::Arc;
-    use crate::{types::ShortenRequest, services::cache::circuit_breaker::CircuitBreaker};
+    use tower::ServiceExt;
+
+    use crate::{
+        clock::SystemClock,
+        services::{
+            analytics::AnalyticsService,
+            cache::{cache::CacheService, circuit_breaker::CircuitBreaker},
+            codegen::generator::CodeGenerator,
+            storage::dragonfly::DatabaseClient,
+        },
+        types::ShortenRequest,
+    };
 
     #[tokio::test]
     async fn test_shorten_handler() {
@@ -70,15 +112,23 @@ mod tests {
         ));
         let analytics = Arc::new(AnalyticsService::new(&config, Arc::clone(&circuit_breaker)).await);
         let codegen = Arc::new(CodeGenerator::new(&config));
+        let clock = Arc::new(SystemClock);
+        let rl_db = Arc::new(DatabaseClient::new(&config, Arc::clone(&circuit_breaker)).await.unwrap());
+
+        let state = AppState {
+            config: Arc::clone(&config),
+            cache: Arc::clone(&cache),
+            analytics: Arc::clone(&analytics),
+            codegen: Arc::clone(&codegen),
+            clock: Arc::clone(&clock),
+            rl_db: Arc::clone(&rl_db),
+        };
 
         let app = Router::new()
             .route("/shorten", post(shorten_handler))
-            .layer(Extension(Arc::clone(&config)))
-            .layer(Extension(Arc::clone(&cache)))
-            .layer(Extension(Arc::clone(&analytics)))
-            .layer(Extension(Arc::clone(&codegen)));
+            .with_state(state);
 
-        let request = ShortenRequest {
+        let request_payload = ShortenRequest {
             url: "https://example.com".to_string(),
             custom_alias: None,
             expiration_date: None,
@@ -90,12 +140,17 @@ mod tests {
                     .method("POST")
                     .uri("/shorten")
                     .header(header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(serde_json::to_string(&request).unwrap()))
-                    .unwrap()
+                    .body(Body::from(serde_json::to_string(&request_payload).unwrap()))
+                    .unwrap(),
             )
             .await
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
+
+        let body_bytes = hyper::body::to_bytes(response.into_body()).await.unwrap();
+        let parsed: ShortenResponse = serde_json::from_slice(&body_bytes).unwrap();
+        assert!(parsed.short_url.contains("/redirect/"));
+        assert_eq!(parsed.expiration_date, None);
     }
 }

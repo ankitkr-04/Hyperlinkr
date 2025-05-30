@@ -1,139 +1,181 @@
 use async_trait::async_trait;
-use bb8_redis::{bb8::Pool, RedisConnectionManager, redis::{AsyncCommands, pipe}};
-use std::{sync::Arc, time::{Duration, Instant}};
-use crate::{config::settings::Settings, errors::AppError};
-use crate::services::cache::circuit_breaker::CircuitBreaker;
-use crate::services::metrics;
+use fred::{
+    clients::ExclusivePool as FredPool,
+    prelude::{ KeysInterface, SortedSetsInterface, TransactionInterface, Blocking::Block, Error},
+    types::{config::{Config, ConnectionConfig, PerformanceConfig, ReconnectPolicy, ServerConfig, Server}, Expiration},
+    
+};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+use url::Url;
+use crate::{
+    config::settings::Settings,
+    errors::AppError,
+    services::{
+        cache::circuit_breaker::CircuitBreaker,
+        metrics,
+    },
+};
 use super::storage::Storage;
 
 pub struct DatabaseClient {
-    pools: Vec<Pool<RedisConnectionManager>>,
+    pools: Vec<(String, FredPool)>, // (URL, Pool) pairs
     circuit_breaker: Arc<CircuitBreaker>,
 }
 
 impl DatabaseClient {
-    pub async fn new(
-        config: &Settings,
-        circuit_breaker: Arc<CircuitBreaker>,
-    ) -> Result<Self, AppError> {
-        let mut pools = Vec::with_capacity(config.database_urls.len());
+    pub async fn new(config: &Settings, circuit_breaker: Arc<CircuitBreaker>) -> Result<Self, AppError> {
+        let mut pools = Vec::new();
+
         for url in &config.database_urls {
-            let mgr = RedisConnectionManager::new(url.clone())
-                .map_err(|_| AppError::RedisConnection)?;
-            let pool = Pool::builder()
-                .max_size(config.cache.redis_pool_size)
-                .connection_timeout(Duration::from_secs(5))
-                .idle_timeout(Some(Duration::from_secs(300)))
-                .build(mgr)
+            let parsed_url = Url::parse(url)
+                .map_err(|e| AppError::RedisConnection(format!("Invalid URL {}: {}", url, e)))?;
+            let host = parsed_url
+                .host_str()
+                .ok_or_else(|| AppError::RedisConnection(format!("No host in URL {}", url)))?
+                .to_string();
+            let port = parsed_url.port().unwrap_or(6379);
+
+            let redis_config = Config {
+                server: ServerConfig::Centralized {
+                    server:  Server { 
+                        host: host.into(),
+                        port,
+                     },
+                },
+                blocking: Block,
+                ..Default::default()
+            };
+
+            let perf_config = PerformanceConfig {
+                default_command_timeout: Duration::from_secs(config.cache.redis_command_timeout_secs),
+                max_feed_count: config.cache.redis_max_feed_count,
+                broadcast_channel_capacity: config.cache.redis_broadcast_channel_capacity,
+                ..Default::default()
+            };
+
+            let connection_config = ConnectionConfig {
+                connection_timeout: Duration::from_millis(config.cache.redis_connection_timeout_ms),
+                max_command_attempts: config.cache.redis_max_command_attempts,
+                ..Default::default()
+            };
+
+            let policy = ReconnectPolicy::new_linear(
+                config.cache.redis_reconnect_max_attempts,
+                config.cache.redis_reconnect_delay_ms as u32,
+                config.cache.redis_reconnect_max_delay_ms as u32,
+            );
+
+            let pool = FredPool::new(
+                redis_config,
+                Some(perf_config),
+                Some(connection_config),
+                Some(policy),
+                config.cache.redis_pool_size as usize,
+            )
+            .map_err(|e| AppError::RedisConnection(e.to_string()))?;
+
+            pool.connect().await;
+            pool.wait_for_connect()
                 .await
-                .map_err(|_| AppError::RedisConnection)?;
-            pools.push(pool);
+                .map_err(|e| AppError::RedisConnection(e.to_string()))?;
+
+            pools.push((url.clone(), pool));
         }
+
         if pools.is_empty() {
-            return Err(AppError::RedisConnection);
+            return Err(AppError::RedisConnection("No database URLs provided".into()));
         }
-        Ok(Self { pools, circuit_breaker })
+
+        Ok(Self {
+            pools,
+            circuit_breaker,
+        })
     }
 
-    /// Attempt `f(pool, node)` up to one try per pool, recording failures.
-    async fn try_with_node<F, T>(&self, mut f: F) -> Result<T, AppError>
-    where
-        F: FnMut(Pool<RedisConnectionManager>, String) -> futures::future::BoxFuture<'_, Result<T, ()>>,
-    {
-        let max = self.pools.len();
-        let mut attempts = 0;
-        let start = Instant::now();
-
-        while attempts < max {
-            // pick a healthy node
-            let node = self.circuit_breaker.get_healthy_node()
-                .await
-                .ok_or_else(|| AppError::CircuitBreaker("No healthy nodes".into()))?;
-            let idx = self.circuit_breaker.get_node_index(&node).unwrap_or(0);
-            if idx >= self.pools.len() {
-                self.circuit_breaker.record_failure(&node).await;
-                attempts += 1;
-                continue;
-            }
-
-            // run the operation
-            match f(self.pools[idx].clone(), node.clone()).await {
-                Ok(result) => {
-                    // record overall latency once
-                    metrics::record_db_latency("op", start);
-                    return Ok(result);
-                }
-                Err(_) => {
-                    self.circuit_breaker.record_failure(&node).await;
-                    metrics::record_db_error("op");
-                    attempts += 1;
-                }
-            }
-        }
-        Err(AppError::RedisConnection)
+    async fn get_pool(&self) -> Result<(&str, &FredPool), AppError> {
+        let node = self
+            .circuit_breaker
+            .get_healthy_node()
+            .await
+            .ok_or_else(|| AppError::RedisConnection("No healthy nodes available".into()))?;
+        self
+            .pools
+            .iter()
+            .find(|(url, _)| url == &node)
+            .map(|(url, pool)| (url.as_str(), pool))
+            .ok_or_else(|| AppError::RedisConnection(format!("Pool for node {} not found", node)))
     }
 }
 
 #[async_trait]
 impl Storage for DatabaseClient {
     async fn get(&self, key: &str) -> Result<String, AppError> {
-        self.try_with_node(|pool, _node| {
-            let key = key.to_string();
-            Box::pin(async move {
-                let mut conn = pool.get().await.map_err(|_| ())?;
-                let data: Option<Vec<u8>> = conn.get(&key).await.map_err(|_| ())?;
-                data
-                    .map(|b| String::from_utf8_lossy(&b).into_owned())
-                    .ok_or(())
-            })
-        })
-        .await
-        .map_err(|_| AppError::NotFound("Key not found".into()))
+        let start = Instant::now();
+        let (node, pool) = self.get_pool().await?;
+        let client = pool.acquire().await;
+        let data: Option<String> = match (*client).get(key).await {
+            Ok(data) => data,
+            Err(e) => {
+                self.circuit_breaker.record_failure(node).await;
+                return Err(AppError::RedisConnection(e.to_string()));
+            }
+        };
+        metrics::record_db_latency("get", start);
+        data.ok_or_else(|| AppError::NotFound("Key not found".into()))
     }
 
     async fn set_ex(&self, key: &str, value: &str, ttl: u64) -> Result<(), AppError> {
-        self.try_with_node(|pool, _node| {
-            let key = key.to_string();
-            let value = value.to_string();
-            Box::pin(async move {
-                let mut conn = pool.get().await.map_err(|_| ())?;
-                conn.set_ex(&key, &value, ttl).await.map_err(|_| ())?;
-                Ok(())
-            })
-        })
-        .await
+        let start = Instant::now();
+        let (node, pool) = self.get_pool().await?;
+        let client = pool.acquire().await;
+        let result: Result<i64, Error> = (*client)
+            .set(key, value, Some(Expiration::EX(ttl as i64)), None, false)
+            .await;
+        if let Err(e) = result {
+            self.circuit_breaker.record_failure(node).await;
+            return Err(AppError::RedisConnection(e.to_string()));
+        }
+        metrics::record_db_latency("set_ex", start);
+        Ok(())
     }
 
     async fn zadd(&self, key: &str, score: u64, member: u64) -> Result<(), AppError> {
-        self.try_with_node(|pool, _node| {
-            let key = key.to_string();
-            Box::pin(async move {
-                let mut conn = pool.get().await.map_err(|_| ())?;
-                conn.zadd(&key, member, score).await.map_err(|_| ())?;
-                Ok(())
-            })
-        })
-        .await
+        let start = Instant::now();
+        let (node, pool) = self.get_pool().await?;
+        let client = pool.acquire().await;
+        let res: Result<i64, Error> = (*client)
+            .zadd(key, None, None, false, false, (score as f64, member))
+            .await;
+        if let Err(e) = res {
+            self.circuit_breaker.record_failure(node).await;
+            return Err(AppError::RedisConnection(e.to_string()));
+        }
+        metrics::record_db_latency("zadd", start);
+        Ok(())
     }
 
     async fn rate_limit(&self, key: &str, limit: u64, window_secs: i64) -> Result<bool, AppError> {
-        let key = key.to_string();
-        self.try_with_node(|pool, _node| {
-            let key = key.clone();
-            Box::pin(async move {
-                let mut conn = pool.get().await.map_err(|_| ())?;
-                let now = chrono::Utc::now().timestamp();
-                let mut pipeline = pipe();
-                pipeline
-                    .atomic()
-                    .cmd("ZREMRANGEBYSCORE").arg(&key).arg(0).arg(now - window_secs).ignore()
-                    .cmd("ZCARD").arg(&key)
-                    .cmd("ZADD").arg(&key).arg(now).arg(now).ignore()
-                    .cmd("EXPIRE").arg(&key).arg(window_secs).ignore();
-                let (count,): (i64,) = pipeline.query_async(&mut conn).await.map_err(|_| ())?;
-                Ok(count < limit as i64)
-            })
-        })
-        .await
+        let start = Instant::now();
+        let now_ts = chrono::Utc::now().timestamp();
+        let now_u64 = now_ts as u64;
+        let (node, pool) = self.get_pool().await?;
+        let client = pool.acquire().await;
+        let tx = (*client).multi();
+        let _ = tx.zremrangebyscore::<i64, &str, i64, i64>(key, 0, now_ts - window_secs);
+        let _ = tx.zcard::<i64, &str>(key);
+        let _ = tx.zadd::<i64, &str, _>(key, None, None, false, false, (now_ts as f64, now_u64));
+        let _ = tx.expire::<i64, &str>(key, window_secs as i64, Some(fred::types::ExpireOptions::LT));
+
+        let results: Vec<i64> = match tx.exec(false).await {
+            Ok(res) => res,
+            Err(e) => {
+                self.circuit_breaker.record_failure(node).await;
+                return Err(AppError::RedisConnection(e.to_string()));
+            }
+        };
+        let count = results.get(1).copied().unwrap_or(0);
+        metrics::record_db_latency("rate_limit", start);
+        Ok(count < limit as i64)
     }
 }

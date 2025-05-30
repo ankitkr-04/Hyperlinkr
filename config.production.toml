@@ -1,0 +1,44 @@
+# config.production.toml
+environment = "production"
+
+# In prod you might have a Redis cluster
+database_urls = [
+  "redis://prod-redis-1.example.com:6379",
+  "redis://prod-redis-2.example.com:6379",
+  "redis://prod-redis-3.example.com:6379"
+]
+
+# The public-facing URL for your service
+base_url = "https://short.en"
+
+# Your container or host port
+app_port = 80
+
+[cache]
+# Tuning for high throughput in prod
+l1_capacity         = 100_000
+l2_capacity         = 1_000_000
+bloom_bits          = 10_485_760  # ~10M bits
+bloom_expected      = 1_000_000
+bloom_shards        = 16
+bloom_block_size    = 256
+redis_pool_size     = 256
+ttl_seconds         = 86_400      # 24 hours
+max_failures        = 10
+retry_interval_secs = 60
+
+[rate_limit]
+# More generous limits or driven by business needs
+shorten_requests_per_minute  = 60
+redirect_requests_per_minute = 100_000
+
+[codegen]
+shard_bits    = 14
+max_attempts  = 8
+
+[analytics]
+# Flush more frequently if you care about near‐real‐time stats
+flush_interval_ms   = 500
+batch_size          = 50_000
+max_batch_size_ms   = 2_000
+max_batch_size      = 50_000

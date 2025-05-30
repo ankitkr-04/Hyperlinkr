@@ -1,38 +1,33 @@
 services:
   dragonfly:
-    build:
-      context: .
-      dockerfile: Dockerfile.dragonfly
+    image: docker.dragonflydb.io/dragonflydb/dragonfly
     ports:
-      - "${DRAGONFLY_PORT}:${DRAGONFLY_PORT}"
-    deploy:
-      resources:
-        limits:
-          memory: ${DRAGONFLY_MEMORY_LIMIT:-3G}
-          cpus: ${DRAGONFLY_CPU_LIMIT:-1.00}
+      - "${DRAGONFLY_PORT:-6379}:6379"
     volumes:
       - dragonfly_data:/data
+    command:
+      - dragonfly
+      - --maxmemory=${DRAGONFLY_MAXMEMORY:-1250mb}
+      - --cache_mode=${DRAGONFLY_CACHE_MODE:-true}
+      - --snapshot_cron=${DRAGONFLY_SNAPSHOT_CRON:-* * * * *}
+      - --nodf_snapshot_format
+      - --dbfilename=${DRAGONFLY_DBFILENAME:-dump.df}
+      - --bind=${DRAGONFLY_BIND:-0.0.0.0}
+      - --port=${DRAGONFLY_PORT:-6379}
+      - --proactor_threads=${DRAGONFLY_PROACTOR_THREADS:-2}
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "redis-cli", "-p", "6379", "ping"]
       interval: 5s
       timeout: 2s
       retries: 3
-    environment:
-      - DRAGONFLY_MAXMEMORY
-      - DRAGONFLY_CACHE_MODE
-      - DRAGONFLY_SAVE_SCHEDULE
-      - DRAGONFLY_AOF
-      - DRAGONFLY_DBFILENAME
-      - DRAGONFLY_BIND
-      - DRAGONFLY_PORT
 
   app:
     build: .
     ports:
-      - "${APP_PORT}:${APP_PORT}"
+      - "${APP_PORT:-3000}:3000"
     environment:
-      - RUST_LOG
-      - DATABASE_URL
+      - ENVIRONMENT=${ENVIRONMENT:-development}
+      - COMPOSE_BAKE=${COMPOSE_BAKE:-true}
     depends_on:
       dragonfly:
         condition: service_healthy

@@ -15,7 +15,7 @@ pub enum AppError {
     Cache(String),
 
     #[error("Redis connection failed")]
-    RedisConnection,
+    RedisConnection(String),
 
     #[error("Redis operation failed: {0}")]
     RedisOperation(String),
@@ -57,7 +57,7 @@ impl IntoResponse for AppError {
             AppError::Validation(err) => (StatusCode::BAD_REQUEST, err.to_string()),
             AppError::CodeGen(err) => (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()),
             AppError::Cache(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg.to_string()),
-            AppError::RedisConnection => (StatusCode::SERVICE_UNAVAILABLE, "Redis connection failed".to_string()),
+            AppError::RedisConnection(msg) => (StatusCode::SERVICE_UNAVAILABLE, msg.to_string()),
             AppError::RedisOperation(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg.to_string()),
             AppError::CircuitBreaker(node) => (StatusCode::SERVICE_UNAVAILABLE, format!("Circuit breaker open for node: {}", node)),
             AppError::Sled(err) => (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()),

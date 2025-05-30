@@ -1,10 +1,9 @@
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 use tracing::{info, warn};
 use rand::seq::SliceRandom;
-use rand::thread_rng;
+use rand::rng;
 
 #[derive(Clone)]
 struct NodeState {
@@ -47,7 +46,7 @@ impl CircuitBreaker {
             warn!("No healthy nodes available");
             return None;
         }
-        healthy_nodes.shuffle(&mut thread_rng());
+        healthy_nodes.shuffle(&mut rng());
         healthy_nodes.first().map(|&node| node.clone())
     }
 

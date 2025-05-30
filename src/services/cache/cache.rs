@@ -1,6 +1,6 @@
 use std::{sync::Arc, time::Instant};
 use futures::future;
-use tracing::{info, error};
+use tracing::info;
 use tokio::time::Duration;
 use crate::{
     config::settings::Settings,
@@ -8,7 +8,7 @@ use crate::{
     services::{
         storage::{storage::Storage, dragonfly::DatabaseClient},
         cache::{
-            bloom::CacheBloom,
+            bloom_filter::bloom::CacheBloom,
             l1_cache::L1Cache,
             l2_cache::L2Cache,
             circuit_breaker::CircuitBreaker,

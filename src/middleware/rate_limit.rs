@@ -1,10 +1,9 @@
-use axum::{middleware::{from_fn, Next}, response::{IntoResponse, Response}, http::{Request, StatusCode}, Extension};
-use std::sync::Arc;
-use crate::{config::settings::Settings, errors::AppError, services::storage::{dragonfly::DatabaseClient, storage::Storage}};
+use axum::{middleware::Next, response::Response, http::Request, extract::State};
+use crate::{errors::AppError, services::storage::storage::Storage};
 use prometheus::IntCounter;
 use tracing::warn;
-use lazy_static::lazy_static;
 use once_cell::sync::Lazy;
+use crate::handlers::shorten::AppState;
 
 static RATE_LIMIT_EXCEEDED: Lazy<IntCounter> = Lazy::new(|| {
     prometheus::register_int_counter!(
@@ -14,8 +13,7 @@ static RATE_LIMIT_EXCEEDED: Lazy<IntCounter> = Lazy::new(|| {
 });
 
 pub async fn rate_limit_middleware(
-    Extension(config): Extension<Arc<Settings>>,
-    Extension(db): Extension<Arc<DatabaseClient>>,
+    State(state): State<AppState>,
     req: Request<axum::body::Body>,
     next: Next,
 ) -> Result<Response, AppError> {
@@ -39,15 +37,15 @@ pub async fn rate_limit_middleware(
     };
 
     let limit = if endpoint == "shorten" {
-        config.rate_limit.shorten_requests_per_minute
+        state.config.rate_limit.shorten_requests_per_minute
     } else {
-        config.rate_limit.redirect_requests_per_minute
+        state.config.rate_limit.redirect_requests_per_minute
     };
 
     let key = format!("rate:{}:{}:{}", endpoint, user_id, ip);
     let window: i64 = 60;
 
-    if !db.rate_limit(&key, limit as u64, window).await? {
+    if !state.rl_db.rate_limit(&key, limit as u64, window).await? {
         RATE_LIMIT_EXCEEDED.inc();
         warn!("Rate limit exceeded for {} on {}", user_id, endpoint);
         return Err(AppError::RateLimitExceeded);
@@ -56,14 +54,14 @@ pub async fn rate_limit_middleware(
     Ok(next.run(req).await)
 }
 
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::{body::Body, http::Request, routing::get, Router};
+    use axum::{body::Body, http::{Request, StatusCode}, routing::get, Router};
     use tower::ServiceExt;
     use std::sync::Arc;
-    use crate::{config::settings::Settings, services::cache::circuit_breaker::CircuitBreaker};
-use once_cell::sync::Lazy;
+    use crate::{config::settings::Settings, services::cache::circuit_breaker::CircuitBreaker, clock::SystemClock, services::analytics::AnalyticsService, services::codegen::generator::CodeGenerator};
 
     #[tokio::test]
     async fn test_rate_limit_middleware() {
@@ -73,13 +71,24 @@ use once_cell::sync::Lazy;
             config.cache.max_failures,
             std::time::Duration::from_secs(config.cache.retry_interval_secs),
         ));
-        let db = Arc::new(DatabaseClient::new(&config, circuit_breaker).await.unwrap());
+        let db = Arc::new(DatabaseClient::new(&config, circuit_breaker.clone()).await.unwrap());
+        let analytics = Arc::new(AnalyticsService::new(&config, Arc::clone(&circuit_breaker)).await);
+        let codegen = Arc::new(CodeGenerator::new(&config));
+        let clock = Arc::new(SystemClock);
+
+        let state = AppState {
+            config: Arc::clone(&config),
+            cache: Arc::new(CacheService::new(&config).await),
+            analytics: Arc::clone(&analytics),
+            codegen: Arc::clone(&codegen),
+            clock: Arc::clone(&clock),
+            rl_db: Arc::clone(&db),
+        };
 
         let app = Router::new()
             .route("/shorten", get(|| async { "ok" }))
-            .layer(from_fn(rate_limit_middleware))
-            .layer(Extension(Arc::clone(&config)))
-            .layer(Extension(Arc::clone(&db)));
+            .layer(axum::middleware::from_fn(rate_limit_middleware))
+            .with_state(state);
 
         let response = app
             .oneshot(
@@ -106,13 +115,24 @@ use once_cell::sync::Lazy;
             config.cache.max_failures,
             std::time::Duration::from_secs(config.cache.retry_interval_secs),
         ));
-        let db = Arc::new(DatabaseClient::new(&config, circuit_breaker).await.unwrap());
+        let db = Arc::new(DatabaseClient::new(&config, circuit_breaker.clone()).await.unwrap());
+        let analytics = Arc::new(AnalyticsService::new(&config, Arc::clone(&circuit_breaker)).await);
+        let codegen = Arc::new(CodeGenerator::new(&config));
+        let clock = Arc::new(SystemClock);
+
+        let state = AppState {
+            config: Arc::clone(&config),
+            cache: Arc::new(CacheService::new(&config).await),
+            analytics: Arc::clone(&analytics),
+            codegen: Arc::clone(&codegen),
+            clock: Arc::clone(&clock),
+            rl_db: Arc::clone(&db),
+        };
 
         let app = Router::new()
             .route("/shorten", get(|| async { "ok" }))
-            .layer(from_fn(rate_limit_middleware))
-            .layer(Extension(Arc::clone(&config)))
-            .layer(Extension(Arc::clone(&db)));
+            .layer(axum::middleware::from_fn(rate_limit_middleware))
+            .with_state(state);
 
         // First request should pass
         let response1 = app.clone()

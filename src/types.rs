@@ -4,7 +4,6 @@ use validator::{Validate, ValidationError};
 use once_cell::sync::Lazy;
 use chrono::{DateTime, Utc};
 use crate::clock::{Clock, SystemClock};
-use crate::clock::MockClock;
 
 static ALPHANUMERIC_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"^[a-zA-Z0-9]+$").unwrap());
 static MALICIOUS_URL_REGEX: Lazy<Regex> = Lazy::new(|| 
@@ -97,6 +96,8 @@ pub struct UrlData {
 mod tests {
     use super::*;
     use chrono::{TimeZone, Duration};
+    use crate::clock::MockClock;
+
 
     #[test]
     fn test_url_validation() {

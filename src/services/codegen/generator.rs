@@ -2,7 +2,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use thiserror::Error;
 use arrayvec::ArrayString;
 use crate::config::settings::Settings;
-use std::sync::Arc;
 use prometheus::{Histogram, IntCounter};
 use lazy_static::lazy_static;
 use tracing::debug;
@@ -35,6 +34,7 @@ pub enum CodeGenError {
 #[derive(Debug)]
 struct PaddedAtomicU64(AtomicU64);
 
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct CodeGenerator {
     counters: Box<[PaddedAtomicU64]>,
@@ -49,8 +49,8 @@ pub struct CodeGenerator {
 
 impl CodeGenerator {
     pub fn new(config: &Settings) -> Self {
-        let shard_bits = config.codegen.shard_bits.unwrap_or(12);
-        let max_attempts = config.codegen.max_attempts.unwrap_or(5);
+        let shard_bits = config.codegen.shard_bits;
+        let max_attempts = config.codegen.max_attempts;
         let shard_mask = (1 << shard_bits) - 1;
         let chunk = 62u64.pow(3);
         let lookup_size = chunk as usize * 3;
@@ -70,6 +70,7 @@ impl CodeGenerator {
             lookup_table[off + 2] = BASE62_CHARS[(val % 62) as usize];
         }
 
+        
         let counters = (0..(1 << shard_bits))
             .map(|_| PaddedAtomicU64(AtomicU64::new(0)))
             .collect::<Vec<_>>()
@@ -185,12 +186,12 @@ impl CodeGenerator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::settings::{Settings, CodeGenConfig};
+    use crate::config::{settings::Settings, codegen::CodeGenConfig};
 
     #[test]
     fn test_code_generation() {
         let config = Settings {
-            codegen: CodeGenConfig { shard_bits: Some(12), max_attempts: Some(5) },
+            codegen: CodeGenConfig { shard_bits: 12, max_attempts: 5 },
             ..Default::default()
         };
         let g = CodeGenerator::new(&config);
@@ -204,7 +205,7 @@ mod tests {
     #[test]
     fn test_overflow_handling() {
         let config = Settings {
-            codegen: CodeGenConfig { shard_bits: Some(2), max_attempts: Some(5) },
+            codegen: CodeGenConfig { shard_bits: 2, max_attempts: 5 },
             ..Default::default()
         };
         let g = CodeGenerator::new(&config);
@@ -219,7 +220,7 @@ mod tests {
     #[test]
     fn test_high_concurrency() {
         let config = Settings {
-            codegen: CodeGenConfig { shard_bits: Some(12), max_attempts: Some(5) },
+            codegen: CodeGenConfig { shard_bits: 1, max_attempts: 5 },
             ..Default::default()
         };
         let g = Arc::new(CodeGenerator::new(&config));

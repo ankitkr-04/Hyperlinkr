@@ -1,66 +1,110 @@
-use axum::{Router, Extension};
-use std::sync::Arc;
-use bb8_redis::RedisConnectionManager;
-use hyperlinkr::{config::settings::{Settings, load}, services::{cache::cache::CacheService, codegen::generator::CodeGenerator, analytics::AnalyticsService}, handlers::{shorten::shorten_handler, redirect::redirect_handler, metrics::metrics_handler}, middleware::rate_limit::rate_limit_middleware};
+use axum::{routing::{get, post}, Router};
+use axum_server::{bind, Handle};
+use std::{net::SocketAddr, sync::Arc, time::Duration};
 use tracing::info;
-use tokio::signal;
 
-async fn create_app(config: Arc<Settings>) -> Router {
-    let cache = Arc::new(CacheService::new(&config).await);
-    let codegen = Arc::new(CodeGenerator::new(&config));
-    let analytics = Arc::new(AnalyticsService::new(config.analytics.clone()));
-    let redis_manager = RedisConnectionManager::new(&config.database_url).unwrap();
-    let redis_pool = bb8::Pool::builder()
-        .max_size(config.cache.redis_pool_size)
-        .build(redis_manager)
-        .await
-        .unwrap();
-
-    Router::new()
-        .route("/shorten", axum::routing::post(shorten_handler))
-        .route("/redirect/:code", axum::routing::get(redirect_handler))
-        .route("/metrics", axum::routing::get(metrics_handler))
-        .layer(axum::middleware::from_fn_with_state(
-            (config.clone(), redis_pool.clone()),
-            rate_limit_middleware,
-        ))
-        .layer(Extension(config))
-        .layer(Extension(cache))
-        .layer(Extension(codegen))
-        .layer(Extension(analytics))
-        .layer(Extension(redis_pool))
-}
+use hyperlinkr::{
+    clock::SystemClock,
+    config::settings::load,
+    handlers::{metrics::metrics_handler, redirect::redirect_handler, shorten::{shorten_handler, AppState}},
+    middleware::rate_limit::rate_limit_middleware,
+    services::{
+        analytics::AnalyticsService,
+        cache::{cache::CacheService, circuit_breaker::CircuitBreaker},
+        codegen::generator::CodeGenerator,
+        storage::dragonfly::DatabaseClient,
+    },
+};
 
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::fmt::init();
-    let config = Arc::new(load().expect("Failed to load config"));
-    let app = create_app(config.clone()).await;
-    let addr = format!("0.0.0.0:{}", config.app_port).parse().unwrap();
-    info!("Starting server on {}", addr);
-    axum::Server::bind(&addr)
-        .serve(app.into_make_service())
-        .with_graceful_shutdown(shutdown_signal())
+    let config = Arc::new(load().expect("Failed to load configuration"));
+    tracing_subscriber::fmt::init(); // Must be after load() to use RUST_LOG
+
+    let cache = Arc::new(CacheService::new(&config).await);
+    let codegen = Arc::new(CodeGenerator::new(&config));
+
+    let analytics_cb = Arc::new(CircuitBreaker::new(
+        config.database_urls.clone(),
+        config.cache.max_failures,
+        Duration::from_secs(config.cache.retry_interval_secs),
+    ));
+    let _analytics_db = Arc::new(
+        DatabaseClient::new(&config, Arc::clone(&analytics_cb))
+            .await
+            .expect("Failed to create Analytics DB client"),
+    );
+    let analytics = Arc::new(AnalyticsService::new(&config, analytics_cb).await);
+
+    let rl_cb = Arc::new(CircuitBreaker::new(
+        config.database_urls.clone(),
+        config.cache.max_failures,
+        Duration::from_secs(config.cache.retry_interval_secs),
+    ));
+    let rl_db = Arc::new(
+        DatabaseClient::new(&config, Arc::clone(&rl_cb))
+            .await
+            .expect("Failed to create Rate-Limit DB client"),
+    );
+
+    let clock = Arc::new(SystemClock);
+
+    let state = AppState {
+        config: Arc::clone(&config),
+        cache: Arc::clone(&cache),
+        codegen: Arc::clone(&codegen),
+        analytics: Arc::clone(&analytics),
+        rl_db: Arc::clone(&rl_db),
+        clock: Arc::clone(&clock),
+    };
+
+    let app = Router::new()
+        .route("/shorten", post(shorten_handler))
+        .route("/redirect/{code}", get(redirect_handler))
+        .route("/metrics", get(metrics_handler))
+        .layer(axum::middleware::from_fn_with_state(state.clone(), rate_limit_middleware))
+        .with_state(state);
+
+    let addr: SocketAddr = format!("0.0.0.0:{}", config.app_port)
+        .parse()
+        .expect("Invalid listen address");
+    info!("Listening on {}", addr);
+
+    let handle = Handle::new();
+    let shutdown_handle = handle.clone();
+
+    tokio::spawn(async move {
+        shutdown_signal().await;
+        shutdown_handle.graceful_shutdown(Some(Duration::from_secs(30)));
+    });
+
+    bind(addr)
+        .handle(handle)
+        .serve(app.into_make_service_with_connect_info::<SocketAddr>())
         .await
         .unwrap();
 }
 
 async fn shutdown_signal() {
     let ctrl_c = async {
-        signal::ctrl_c().await.expect("Failed to install Ctrl+C handler");
+        tokio::signal::ctrl_c().await.expect("Failed to install Ctrl+C handler");
     };
+
     #[cfg(unix)]
     let terminate = async {
-        signal::unix::signal(signal::unix::SignalKind::terminate())
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
             .expect("Failed to install SIGTERM handler")
             .recv()
             .await;
     };
+
     #[cfg(not(unix))]
     let terminate = std::future::pending::<()>();
+
     tokio::select! {
         _ = ctrl_c => {},
         _ = terminate => {},
     }
-    info!("Received shutdown signal, shutting down gracefully");
+
+    info!("Shutdown signal received, initiating graceful shutdown");
 }
