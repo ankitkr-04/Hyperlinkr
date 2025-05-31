@@ -24,18 +24,29 @@ pub struct AnalyticsService<C: Clock = SystemClock> {
     flush_task: Arc<tokio::sync::Mutex<Option<JoinHandle<()>>>>,
     max_queue_size: usize,
     db: Arc<DatabaseClient>,
-    sled: Arc<SledStorage<C>>,
+    sled: Option<Arc<SledStorage<C>>>, // Optional Sled
     is_shutdown: Arc<AtomicBool>,
     clock: C,
+    use_sled: bool,
+    sled_flush_ms: u64,
 }
 
-impl<C: Clock + Send + Sync> AnalyticsService<C> {
+impl<C: Clock + Send + Sync + 'static> AnalyticsService<C> {
     pub async fn new(config: &Settings, circuit_breaker: Arc<CircuitBreaker>, clock: C) -> Self {
         let queue = Arc::new(SegQueue::new());
         let max_queue_size = config.analytics.max_queue_size.unwrap_or(100_000);
         let db = Arc::new(DatabaseClient::new(config, Arc::clone(&circuit_breaker)).await.unwrap());
-        let sled = Arc::new(SledStorage::with_clock(config, clock.clone()));
-        let flush_task = Self::start_flush_task(Arc::clone(&queue), config, Arc::clone(&db), Arc::clone(&sled)).await;
+        let sled = if config.cache.use_sled {
+            Some(Arc::new(SledStorage::with_clock(config, clock.clone())))
+        } else {
+            None
+        };
+        let flush_task = Self::start_flush_task(
+            Arc::clone(&queue),
+            config,
+            Arc::clone(&db),
+            sled.clone(),
+        ).await;
 
         Self {
             queue,
@@ -45,6 +56,8 @@ impl<C: Clock + Send + Sync> AnalyticsService<C> {
             sled,
             is_shutdown: Arc::new(AtomicBool::new(false)),
             clock,
+            use_sled: config.cache.use_sled,
+            sled_flush_ms: config.cache.sled_flush_ms,
         }
     }
 
@@ -66,20 +79,28 @@ impl<C: Clock + Send + Sync> AnalyticsService<C> {
         match self.db.zrange(&key, start, end).await {
             Ok(data) if !data.is_empty() => Ok(data),
             _ => {
-                match self.sled.zrange(&key, start, end).await {
-                    Ok(data) if !data.is_empty() => {
-                        let operations = data.iter().map(|(score, member)| (key.clone(), *score, *member)).collect();
-                        if let Err(e) = self.db.zadd_batch(operations, 90 * 24 * 3600).await {
-                            error!("Failed to restore analytics to DragonflyDB: {}", e);
-                            metrics::record_analytics_error("restore");
+                if self.use_sled {
+                    if let Some(sled) = &self.sled {
+                        match sled.zrange(&key, start, end).await {
+                            Ok(data) if !data.is_empty() => {
+                                let operations = data.iter().map(|(score, member)| (key.clone(), *score, *member)).collect();
+                                if let Err(e) = self.db.zadd_batch(operations, 90 * 24 * 3600).await {
+                                    error!("Failed to restore analytics to DragonflyDB: {}", e);
+                                    metrics::record_analytics_error("restore");
+                                }
+                                Ok(data)
+                            }
+                            Ok(_) => Ok(vec![]),
+                            Err(e) => {
+                                metrics::record_analytics_error("zrange_sled");
+                                Err(e)
+                            }
                         }
-                        Ok(data)
+                    } else {
+                        Ok(vec![])
                     }
-                    Ok(_) => Ok(vec![]),
-                    Err(e) => {
-                        metrics::record_analytics_error("zrange_sled");
-                        Err(e)
-                    }
+                } else {
+                    Ok(vec![])
                 }
             }
         }
@@ -102,10 +123,11 @@ impl<C: Clock + Send + Sync> AnalyticsService<C> {
         queue: Arc<SegQueue<AnalyticsMessage>>,
         config: &Settings,
         db: Arc<DatabaseClient>,
-        sled: Arc<SledStorage<C>>,
+        sled: Option<Arc<SledStorage<C>>>,
     ) -> JoinHandle<()> {
         let batch_size = config.analytics.max_batch_size;
-        let batch_time_ms = config.analytics.max_batch_size_ms;
+        let batch_time_ms = config.cache.sled_flush_ms; // Use sled_flush_ms for consistency
+        let use_sled = config.cache.use_sled;
 
         tokio::spawn(async move {
             let mut batch = Vec::with_capacity(batch_size);
@@ -117,25 +139,25 @@ impl<C: Clock + Send + Sync> AnalyticsService<C> {
                         AnalyticsMessage::Click(code, ts) => {
                             batch.push((code, ts));
                             if batch.len() >= batch_size {
-                                Self::flush_batch(&db, &sled, &mut batch).await;
+                                Self::flush_batch(&db, &sled, &mut batch, use_sled).await;
                             }
                         }
                         AnalyticsMessage::Shutdown => {
                             if !batch.is_empty() {
-                                Self::flush_batch(&db, &sled, &mut batch).await;
+                                Self::flush_batch(&db, &sled, &mut batch, use_sled).await;
                             }
                             return;
                         }
                     }
                 }
                 if !batch.is_empty() {
-                    Self::flush_batch(&db, &sled, &mut batch).await;
+                    Self::flush_batch(&db, &sled, &mut batch, use_sled).await;
                 }
             }
         })
     }
 
-    async fn flush_batch(db: &Arc<DatabaseClient>, sled: &Arc<SledStorage<C>>, batch: &mut Vec<(String, u64)>) {
+    async fn flush_batch(db: &Arc<DatabaseClient>, sled: &Option<Arc<SledStorage<C>>>, batch: &mut Vec<(String, u64)>, use_sled: bool) {
         if batch.is_empty() {
             return;
         }
@@ -151,13 +173,22 @@ impl<C: Clock + Send + Sync> AnalyticsService<C> {
             metrics::record_analytics_error("flush_dragonfly");
         }
 
-        let sled_result = sled.zadd_batch(operations, 0).await; // No expiry in Sled
-        if let Err(e) = sled_result {
-            error!("Failed to flush analytics to Sled: {}", e);
-            metrics::record_analytics_error("flush_sled");
+        let mut sled_success = false;
+        if use_sled {
+            if let Some(sled) = sled {
+                let sled_result = sled.zadd_batch(operations, 0).await; // No expiry in Sled
+                if let Err(e) = sled_result {
+                    error!("Failed to flush analytics to Sled: {}", e);
+                    metrics::record_analytics_error("flush_sled");
+                } else {
+                    sled_success = true;
+                }
+            }
+        } else {
+            sled_success = true; // No Sled operation needed
         }
 
-        if dragonfly_result.is_ok() || sled_result.is_ok() {
+        if dragonfly_result.is_ok() || sled_success {
             info!("Flushed {} analytics events in {:?}", batch.len(), start.elapsed());
             metrics::record_batch_flush(batch.len());
             batch.clear();
@@ -167,7 +198,7 @@ impl<C: Clock + Send + Sync> AnalyticsService<C> {
     }
 }
 
-impl<C: Clock + Send + Sync> Drop for AnalyticsService<C> {
+impl<C: Clock + Send + Sync + 'static> Drop for AnalyticsService<C> {
     fn drop(&mut self) {
         if self.is_shutdown.load(Ordering::SeqCst) {
             return;
@@ -175,19 +206,20 @@ impl<C: Clock + Send + Sync> Drop for AnalyticsService<C> {
         let queue = Arc::clone(&self.queue);
         let flush_task = Arc::clone(&self.flush_task);
         let db = Arc::clone(&self.db);
-        let sled = Arc::clone(&self.sled);
+        let sled = self.sled.clone();
+        let use_sled = self.use_sled;
         tokio::spawn(async move {
             let mut batch = Vec::with_capacity(1000);
             while let Some(msg) = queue.pop() {
                 if let AnalyticsMessage::Click(code, ts) = msg {
                     batch.push((code, ts));
                     if batch.len() >= 1000 {
-                        Self::flush_batch(&db, &sled, &mut batch).await;
+                        Self::flush_batch(&db, &sled, &mut batch, use_sled).await;
                     }
                 }
             }
             if !batch.is_empty() {
-                Self::flush_batch(&db, &sled, &mut batch).await;
+                Self::flush_batch(&db, &sled, &mut batch, use_sled).await;
             }
             if let Some(task) = flush_task.lock().await.take() {
                 if let Err(e) = task.await {
@@ -225,6 +257,8 @@ mod tests {
             },
             cache: CacheConfig {
                 sled_path: "/tmp/test_sled".to_string(),
+                use_sled: true, // Enable Sled for test
+                sled_flush_ms: 600_000, // 10 minutes
                 ..Default::default()
             },
             ..Default::default()
@@ -263,5 +297,47 @@ mod tests {
 
         // Verify shutdown metrics
         assert_eq!(metrics::QUEUE_LENGTH.get().unwrap().get(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_analytics_service_no_sled() {
+        let fixed_time = DateTime::parse_from_rfc3339("2025-05-31T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let clock = MockClock::new(fixed_time);
+        let config = Arc::new(Settings {
+            analytics: AnalyticsConfig {
+                max_batch_size: 1000,
+                max_batch_size_ms: 200,
+                max_queue_size: Some(100_000),
+                ..Default::default()
+            },
+            cache: CacheConfig {
+                sled_path: "/tmp/test_sled".to_string(),
+                use_sled: false, // Disable Sled
+                sled_flush_ms: 600_000, // 10 minutes
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        metrics::init_metrics();
+        let circuit_breaker = Arc::new(CircuitBreaker::new(vec![], 5, Duration::from_secs(60)));
+        let analytics = Arc::new(AnalyticsService::new(&config, Arc::clone(&circuit_breaker), clock).await);
+
+        // Record a click
+        analytics.record_click("test").await;
+
+        // Wait for flush
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        // Check stats in DB
+        let stats = analytics.get_analytics("test", 0, -1).await.unwrap();
+        let expected_ts = fixed_time.timestamp() as u64;
+        assert_eq!(stats, vec![(expected_ts, expected_ts)]);
+
+        // Verify metrics
+        assert_eq!(metrics::CLICKS_RECORDED.get().unwrap().get(), 1);
+        assert!(metrics::BATCHES_FLUSHED.get().unwrap().get() >= 1);
+        assert_eq!(metrics::ANALYTICS_ERRORS.get().unwrap().with_label_values(&["flush_sled"]).get(), 0); // No Sled errors
     }
 }

@@ -32,6 +32,9 @@ pub enum AppError {
     #[error("Rate limit exceeded")]
     RateLimitExceeded,
 
+    #[error("Rate limit exceeded with response")]
+    RateLimitExceededWithResponse(Response),
+
     #[error("Not found: {0}")]
     NotFound(String),
 
@@ -56,24 +59,26 @@ pub enum AppError {
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
-        let (status, message) = match &self {
-            AppError::Validation(err) => (StatusCode::BAD_REQUEST, err.to_string()),
-            AppError::CodeGen(err) => (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()),
-            AppError::Cache(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg.to_string()),
-            AppError::RedisConnection(msg) => (StatusCode::SERVICE_UNAVAILABLE, msg.to_string()),
-            AppError::RedisOperation(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg.to_string()),
-            AppError::CircuitBreaker(node) => (StatusCode::SERVICE_UNAVAILABLE, format!("Circuit breaker open for node: {}", node)),
-            AppError::Sled(err) => (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()),
-            AppError::Analytics(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg.to_string()),
-            AppError::RateLimitExceeded => (StatusCode::TOO_MANY_REQUESTS, "Rate limit exceeded".to_string()),
-            AppError::NotFound(msg) => (StatusCode::NOT_FOUND, msg.to_string()),
-            AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg.to_string()),
-            AppError::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg.to_string()),
-            AppError::Expired => (StatusCode::GONE, "URL expired".to_string()),
-            AppError::DuplicateAlias(alias) => (StatusCode::CONFLICT, format!("Duplicate alias: {}", alias)),
-            AppError::InvalidUrl(msg) => (StatusCode::BAD_REQUEST, msg.to_string()),
-            AppError::Unauthorized(msg) => (StatusCode::UNAUTHORIZED, msg.to_string()),
-        };
-        (status, message).into_response()
+        match self {
+            AppError::RateLimitExceededWithResponse(resp) => resp,
+            AppError::Validation(err) => (StatusCode::BAD_REQUEST, err.to_string()).into_response(),
+            AppError::CodeGen(err) => (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
+            AppError::Cache(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
+            AppError::RedisConnection(msg) => (StatusCode::SERVICE_UNAVAILABLE, msg).into_response(),
+            AppError::RedisOperation(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
+            AppError::CircuitBreaker(node) => (StatusCode::SERVICE_UNAVAILABLE, format!("Circuit breaker open for node: {}", node)).into_response(),
+            AppError::Sled(err) => (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
+            AppError::Analytics(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
+            AppError::RateLimitExceeded => (StatusCode::TOO_MANY_REQUESTS, "Rate limit exceeded".to_string()).into_response(),
+
+            AppError::RateLimitExceededWithResponse(resp) => resp,
+            AppError::NotFound(msg) => (StatusCode::NOT_FOUND, msg).into_response(),
+            AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg).into_response(),
+            AppError::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
+            AppError::Expired => (StatusCode::GONE, "URL expired".to_string()).into_response(),
+            AppError::DuplicateAlias(alias) => (StatusCode::CONFLICT, format!("Duplicate alias: {}", alias)).into_response(),
+            AppError::InvalidUrl(msg) => (StatusCode::BAD_REQUEST, msg).into_response(),
+            AppError::Unauthorized(msg) => (StatusCode::UNAUTHORIZED, msg).into_response(),
+        }
     }
 }

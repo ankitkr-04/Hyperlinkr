@@ -51,6 +51,11 @@ url = "*"
 cuid = "*"
 
 
+[dependencies.xxhash-rust]
+version = "*"
+features = ["xxh3", "const_xxh3"]
+
+
 [dev-dependencies]
 tokio-test = "0.4.4"
 test-case = "3.3.1"

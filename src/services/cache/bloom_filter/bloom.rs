@@ -42,6 +42,8 @@ impl CacheBloom {
         key.hash(&mut hasher);
         (hasher.finish() % self.shard_count as u64) as usize
     }
+
+
 }
 
 #[cfg(test)]

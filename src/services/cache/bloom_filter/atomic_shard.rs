@@ -26,4 +26,5 @@ impl AtomicBloomShard {
     pub fn insert(&self, key: &[u8]) {
         let _ = unsafe { (*self.inner.get()).insert(key) };
     }
+
 }

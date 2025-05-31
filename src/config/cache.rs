@@ -1,11 +1,8 @@
 use serde::Deserialize;
 use validator::Validate;
 
-
-
-#[derive(Debug, Deserialize, Validate)]
+#[derive(Debug, Deserialize, Validate, Clone)]
 pub struct CacheConfig {
-    // Existing fields (unchanged)
     #[validate(range(min = 1000))]
     pub l1_capacity: usize,
     #[validate(range(min = 10000))]
@@ -42,23 +39,21 @@ pub struct CacheConfig {
     pub redis_reconnect_delay_ms: u64,
     #[validate(range(min = 100))]
     pub redis_reconnect_max_delay_ms: u64,
-
-    // New Sled-specific fields
     #[validate(length(min = 1))]
-    pub sled_path: String, // Storage path
-    #[validate(range(min = 16_777_216))] // 16MB minimum
+    pub sled_path: String,
+    #[validate(range(min = 16777216))]
     pub sled_cache_bytes: u64,
-    #[validate(range(min = 100, max = 60_000))] // 100ms to 60s
+    #[validate(range(min = 60_000, max = 900000))] // 10-15 minutes
     pub sled_flush_ms: u64,
-    #[validate(range(min = 1, max = 3600))] // 1s to 1hr
+    #[validate(range(min = 1, max = 3600))]
     pub sled_snapshot_ttl_secs: u64,
-    pub sled_compression: bool, // Toggle compression
+    pub sled_compression: bool,
+    pub use_sled: bool, // New field to toggle Sled
 }
 
 impl Default for CacheConfig {
     fn default() -> Self {
         Self {
-            // Existing defaults (unchanged)
             l1_capacity: 10_000,
             l2_capacity: 100_000,
             bloom_bits: 1_048_576,
@@ -77,13 +72,12 @@ impl Default for CacheConfig {
             redis_reconnect_max_attempts: 3,
             redis_reconnect_delay_ms: 100,
             redis_reconnect_max_delay_ms: 500,
-
-            // New Sled defaults
             sled_path: "/tmp/sled_hyperlinkr".to_string(),
             sled_cache_bytes: 64 * 1024 * 1024, // 64MB
-            sled_flush_ms: 1_000, // 1s
-            sled_snapshot_ttl_secs: 5, // 5s
+            sled_flush_ms: 600_000, // 10 minutes
+            sled_snapshot_ttl_secs: 5,
             sled_compression: true,
+            use_sled: true, // Default to disabled
         }
     }
 }
