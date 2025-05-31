@@ -1,10 +1,13 @@
 use async_trait::async_trait;
 use fred::{
     clients::ExclusivePool as FredPool,
-    prelude::{ KeysInterface, SortedSetsInterface, TransactionInterface, Blocking::Block, Error},
-    types::{config::{Config, ConnectionConfig, PerformanceConfig, ReconnectPolicy, ServerConfig, Server}, Expiration},
-    
+    prelude::{Blocking::Block, Error, KeysInterface, SortedSetsInterface, TransactionInterface},
+    types::{
+        config::{Config, ConnectionConfig, PerformanceConfig, ReconnectPolicy, Server, ServerConfig}, scan::{ScanResult, ScanType, Scanner}, Expiration
+    },
 };
+use futures::StreamExt; // For Stream::next()
+use serde_json;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use url::Url;
@@ -15,12 +18,14 @@ use crate::{
         cache::circuit_breaker::CircuitBreaker,
         metrics,
     },
+    types::{Paginate, UrlData, User},
 };
 use super::storage::Storage;
 
 pub struct DatabaseClient {
     pools: Vec<(String, FredPool)>, // (URL, Pool) pairs
     circuit_breaker: Arc<CircuitBreaker>,
+    global_admins: Vec<String>,
 }
 
 impl DatabaseClient {
@@ -38,10 +43,10 @@ impl DatabaseClient {
 
             let redis_config = Config {
                 server: ServerConfig::Centralized {
-                    server:  Server { 
+                    server: Server {
                         host: host.into(),
                         port,
-                     },
+                    },
                 },
                 blocking: Block,
                 ..Default::default()
@@ -90,6 +95,7 @@ impl DatabaseClient {
         Ok(Self {
             pools,
             circuit_breaker,
+            global_admins: config.security.global_admins.clone(),
         })
     }
 
@@ -217,5 +223,307 @@ impl Storage for DatabaseClient {
                 Err(AppError::RedisConnection(e.to_string()))
             }
         }
+    }
+
+    async fn delete_url(&self, code: &str, user_id: Option<&str>, user_email: &str) -> Result<(), AppError> {
+        let start = Instant::now();
+        let key = format!("url:{}", code);
+        let (node, pool) = self.get_pool().await?;
+        let client = pool.acquire().await;
+
+        let data: Option<String> = match (*client).get(&key).await {
+            Ok(data) => data,
+            Err(e) => {
+                self.circuit_breaker.record_failure(node).await;
+                return Err(AppError::RedisConnection(e.to_string()));
+            }
+        };
+
+        if let Some(json_str) = data {
+            let url_data: UrlData = serde_json::from_str(&json_str)
+                .map_err(|e| AppError::Internal(e.to_string()))?;
+
+            let is_admin = self.global_admins.iter().any(|admin| admin == user_email);
+            let is_owner = url_data.user_id.as_deref() == user_id || url_data.user_id.is_none();
+            if !is_owner && !is_admin {
+                return Err(AppError::Unauthorized("Not authorized to delete this URL".into()));
+            }
+
+            match (*client).del(&key).await {
+                Ok(_) => (),
+                Err(e) => {
+                    self.circuit_breaker.record_failure(node).await;
+                    return Err(AppError::RedisConnection(e.to_string()));
+                }
+            }
+        } else {
+            return Err(AppError::NotFound(format!("URL {} not found", code)));
+        }
+
+        metrics::record_db_latency("delete_url_dragonfly", start);
+        Ok(())
+    }
+
+    async fn list_urls(
+        &self,
+        user_id: Option<&str>,
+        page: u64,
+        per_page: u64,
+    ) -> Result<Paginate<UrlData>, AppError> {
+        let start = Instant::now();
+        let is_admin = user_id.is_none();
+        let per_page = per_page.clamp(1, 100);
+        let offset = page.saturating_sub(1) * per_page;
+
+        let (node, pool) = self.get_pool().await?;
+        let client = pool.acquire().await;
+
+        let mut items = Vec::new();
+        let mut total_items: u64 = 0;
+
+        let pattern = "url:*".to_string();
+        let scan_count = Some(1000u32);
+        let mut scanner = (*client).scan(pattern.clone(), scan_count, Some(ScanType::String));
+
+        while let Some(page_result) = scanner.next().await {
+            let mut scan_page: ScanResult = page_result.map_err(|e| {
+                futures::executor::block_on(self.circuit_breaker.record_failure(node));
+                AppError::RedisConnection(e.to_string())
+            })?;
+
+            let keys = scan_page.take_results().unwrap_or_default();
+
+            for key in keys {
+                let json_str: String = match (*client).get(&key).await {
+                    Ok(data) => data,
+                    Err(e) => {
+                        self.circuit_breaker.record_failure(node).await;
+                        return Err(AppError::RedisConnection(e.to_string()));
+                    }
+                };
+
+                let url_data: UrlData = serde_json::from_str(&json_str)
+                    .map_err(|e| AppError::Internal(e.to_string()))?;
+
+                let is_visible = is_admin
+                    || url_data.user_id.as_deref() == user_id
+                    || url_data.user_id.is_none();
+
+                if is_visible {
+                    total_items += 1;
+                    if total_items > offset && items.len() < per_page as usize {
+                        items.push(url_data);
+                    }
+                }
+            }
+
+            if !scan_page.has_more() {
+                break;
+            }
+
+            if items.len() >= per_page as usize && total_items >= offset + per_page {
+                scan_page.cancel();
+                break;
+            }
+
+            scan_page.next();
+        }
+
+        let total_pages = if total_items == 0 {
+            1
+        } else {
+            (total_items + per_page - 1) / per_page
+        };
+
+        metrics::record_db_latency("list_urls_dragonfly", start);
+        Ok(Paginate {
+            items,
+            page,
+            per_page,
+            total_items,
+            total_pages,
+        })
+    }
+
+    async fn set_user(&self, user: &User) -> Result<(), AppError> {
+        let start = Instant::now();
+        let key = format!("user:{}", user.id);
+        let email_key = format!("user_email:{}", user.email);
+        let data = serde_json::to_string(user)
+            .map_err(|e| AppError::Internal(e.to_string()))?;
+
+        let (node, pool) = self.get_pool().await?;
+        let client = pool.acquire().await;
+
+        let tx = (*client).multi();
+        let _ = tx.set(&key, &data, None, None, false).await;
+        let _ = tx.set(&email_key, &user.id, None, None, false).await;
+
+        match tx.exec(true).await {
+            Ok(_) => (),
+            Err(e) => {
+                self.circuit_breaker.record_failure(node).await;
+                return Err(AppError::RedisConnection(e.to_string()));
+            }
+        }
+
+        metrics::record_db_latency("set_user_dragonfly", start);
+        Ok(())
+    }
+
+    async fn get_user(&self, id_or_email: &str) -> Result<Option<User>, AppError> {
+        let start = Instant::now();
+        let (node, pool) = self.get_pool().await?;
+        let client = pool.acquire().await;
+
+        let key = if id_or_email.contains('@') {
+            let email_key = format!("user_email:{}", id_or_email);
+            match (*client).get::<Option<String>, _>(&email_key).await {
+                Ok(Some(id)) => format!("user:{}", id),
+                Ok(None) => return Ok(None),
+                Err(e) => {
+                    self.circuit_breaker.record_failure(node).await;
+                    return Err(AppError::RedisConnection(e.to_string()));
+                }
+            }
+        } else {
+            format!("user:{}", id_or_email)
+        };
+
+        let data: Option<String> = match (*client).get(&key).await {
+            Ok(data) => data,
+            Err(e) => {
+                self.circuit_breaker.record_failure(node).await;
+                return Err(AppError::RedisConnection(e.to_string()));
+            }
+        };
+
+        let user = if let Some(json_str) = data {
+            Some(
+                serde_json::from_str(&json_str)
+                    .map_err(|e| AppError::Internal(e.to_string()))?,
+            )
+        } else {
+            None
+        };
+
+        metrics::record_db_latency("get_user_dragonfly", start);
+        Ok(user)
+    }
+
+    async fn count_users(&self) -> Result<u64, AppError> {
+        let start = Instant::now();
+        let (node, pool) = self.get_pool().await?;
+        let client = pool.acquire().await;
+
+        let mut count: u64 = 0;
+        let pattern = "user:*".to_string();
+        let scan_count = Some(1000u32);
+        let mut scanner = (*client).scan(pattern.clone(), scan_count, Some(ScanType::String));
+
+        while let Some(page_result) = scanner.next().await {
+            let mut scan_page: ScanResult = page_result.map_err(|e| {
+                futures::executor::block_on(self.circuit_breaker.record_failure(node));
+                AppError::RedisConnection(e.to_string())
+            })?;
+
+            let keys = scan_page.take_results().unwrap_or_default();
+            count += keys.len() as u64;
+
+            if !scan_page.has_more() {
+                break;
+            }
+
+            scan_page.next();
+        }
+
+        metrics::record_db_latency("count_users_dragonfly", start);
+        Ok(count)
+    }
+
+    async fn count_urls(&self, user_id: Option<&str>) -> Result<u64, AppError> {
+        let start = Instant::now();
+        let is_admin = user_id.is_none();
+        let (node, pool) = self.get_pool().await?;
+        let client = pool.acquire().await;
+
+        let mut count: u64 = 0;
+        let pattern = "url:*".to_string();
+        let scan_count = Some(1000u32);
+        let mut scanner = (*client).scan(pattern.clone(), scan_count, Some(ScanType::String));
+
+        while let Some(page_result) = scanner.next().await {
+            let mut scan_page: ScanResult = page_result.map_err(|e| {
+                futures::executor::block_on(self.circuit_breaker.record_failure(node));
+                AppError::RedisConnection(e.to_string())
+            })?;
+
+            let keys = scan_page.take_results().unwrap_or_default();
+
+            for key in keys {
+                let json_str: String = match (*client).get(&key).await {
+                    Ok(data) => data,
+                    Err(e) => {
+                        self.circuit_breaker.record_failure(node).await;
+                        return Err(AppError::RedisConnection(e.to_string()));
+                    }
+                };
+
+                let url_data: UrlData = serde_json::from_str(&json_str)
+                    .map_err(|e| AppError::Internal(e.to_string()))?;
+
+                if is_admin || url_data.user_id.as_deref() == user_id || url_data.user_id.is_none() {
+                    count += 1;
+                }
+            }
+
+            if !scan_page.has_more() {
+                break;
+            }
+
+            scan_page.next();
+        }
+
+        metrics::record_db_latency("count_urls_dragonfly", start);
+        Ok(count)
+    }
+
+    async fn blacklist_token(&self, token: &str, expiry_secs: u64) -> Result<(), AppError> {
+        let start = Instant::now();
+        let key = format!("token:{}", token);
+        let (node, pool) = self.get_pool().await?;
+        let client = pool.acquire().await;
+
+        match (*client)
+            .set(&key, "1", Some(Expiration::EX(expiry_secs as i64)), None, false)
+            .await
+        {
+            Ok(_) => (),
+            Err(e) => {
+                self.circuit_breaker.record_failure(node).await;
+                return Err(AppError::RedisConnection(e.to_string()));
+            }
+        }
+
+        metrics::record_db_latency("blacklist_token_dragonfly", start);
+        Ok(())
+    }
+
+    async fn is_token_blacklisted(&self, token: &str) -> Result<bool, AppError> {
+        let start = Instant::now();
+        let key = format!("token:{}", token);
+        let (node, pool) = self.get_pool().await?;
+        let client = pool.acquire().await;
+
+        let exists: bool = match (*client).exists(&key).await {
+            Ok(result) => result,
+            Err(e) => {
+                self.circuit_breaker.record_failure(node).await;
+                return Err(AppError::RedisConnection(e.to_string()));
+            }
+        };
+
+        metrics::record_db_latency("is_token_blacklisted_dragonfly", start);
+        Ok(exists)
     }
 }

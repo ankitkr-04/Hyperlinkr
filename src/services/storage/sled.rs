@@ -10,10 +10,13 @@ use super::storage::Storage;
 use crate::clock::{Clock, SystemClock};
 use crate::config::settings::Settings;
 
+use crate::types::{Paginate, UrlData, User};
+
 pub struct SledStorage<C: Clock = SystemClock> {
     db: Arc<Db>,
     clock: C,
     snapshot_ttl: Duration,
+    global_admins: Vec<String>,
 }
 
 impl SledStorage {
@@ -34,6 +37,7 @@ impl<C: Clock> SledStorage<C> {
             db: Arc::new(db),
             clock,
             snapshot_ttl: Duration::from_secs(config.cache.sled_snapshot_ttl_secs),
+            global_admins: config.security.global_admins.iter().cloned().collect(),
         }
     }
 
@@ -309,5 +313,200 @@ impl<C: Clock + Send + Sync> Storage for SledStorage<C> {
         })?;
         metrics::record_db_latency("zadd_batch_sled", start);
         Ok(())
+    }
+
+    async fn delete_url(&self, code: &str, user_id: Option<&str>, user_email: &str) -> Result<(), AppError> {
+        let start = Instant::now();
+        let key = format!("url:{}", code);
+        let is_admin = self.global_admins.iter().any(|admin| admin == user_email);
+
+        let data = self.db.get(&key).map_err(|e| {
+            metrics::record_db_error("delete_url_sled");
+            AppError::Sled(e)
+        })?;
+
+        if let Some(bytes) = data {
+            let url_data: UrlData = decode_from_slice(&bytes, config::standard())
+                .map(|(data, _)| data)
+                .map_err(|e| AppError::Internal(e.to_string()))?;
+
+            // Check ownership or admin status
+            let is_owner = url_data.user_id.as_deref() == user_id || url_data.user_id.is_none();
+            if !is_owner && !is_admin {
+                return Err(AppError::Unauthorized("Not authorized to delete this URL".into()));
+            }
+
+            self.db.remove(&key).map_err(|e| {
+                metrics::record_db_error("delete_url_sled");
+                AppError::Sled(e)
+            })?;
+        } else {
+            return Err(AppError::NotFound(format!("URL {} not found", code)));
+        }
+
+        metrics::record_db_latency("delete_url_sled", start);
+        Ok(())
+    }
+
+    async fn list_urls(&self, user_id: Option<&str>, page: u64, per_page: u64) -> Result<Paginate<UrlData>, AppError> {
+        let start = Instant::now();
+        let is_admin = user_id.is_none(); // Admins pass None
+        let per_page = per_page.clamp(1, 100); // Limit page size
+        let offset = page.saturating_sub(1) * per_page;
+
+        let mut items = Vec::new();
+        let mut total_items = 0;
+
+        for entry in self.db.scan_prefix("url:") {
+            let (key, value) = entry.map_err(|e| {
+                metrics::record_db_error("list_urls_sled");
+                AppError::Sled(e)
+            })?;
+
+            let url_data: UrlData = decode_from_slice(&value, config::standard())
+                .map(|(data, _)| data)
+                .map_err(|e| AppError::Internal(e.to_string()))?;
+
+            // Filter by user_id (unless admin)
+            if is_admin || url_data.user_id.as_deref() == user_id || url_data.user_id.is_none() {
+                total_items += 1;
+                if total_items > offset && items.len() < per_page as usize {
+                    items.push(url_data);
+                }
+            }
+        }
+
+        let total_pages = (total_items + per_page - 1) / per_page;
+        metrics::record_db_latency("list_urls_sled", start);
+        Ok(Paginate {
+            items,
+            page,
+            per_page,
+            total_items,
+            total_pages,
+        })
+    }
+
+    async fn set_user(&self, user: &User) -> Result<(), AppError> {
+        let start = Instant::now();
+        let key = format!("user:{}", user.id);
+        let data = encode_to_vec(user, config::standard())
+            .map_err(|e| AppError::Internal(e.to_string()))?;
+
+        self.db.insert(key, data).map_err(|e| {
+            metrics::record_db_error("set_user_sled");
+            AppError::Sled(e)
+        })?;
+
+        // Index by email for lookup
+        let email_key = format!("user_email:{}", user.email);
+        self.db.insert(email_key, user.id.as_bytes()).map_err(|e| {
+            metrics::record_db_error("set_user_sled");
+            AppError::Sled(e)
+        })?;
+
+        metrics::record_db_latency("set_user_sled", start);
+        Ok(())
+    }
+
+    async fn get_user(&self, id_or_email: &str) -> Result<Option<User>, AppError> {
+        let start = Instant::now();
+        let key = if id_or_email.contains('@') {
+            // Lookup by email
+            let email_key = format!("user_email:{}", id_or_email);
+            match self.db.get(&email_key).map_err(|e| {
+                metrics::record_db_error("get_user_sled");
+                AppError::Sled(e)
+            })? {
+                Some(id_bytes) => format!(
+                    "user:{}",
+                    String::from_utf8(id_bytes.to_vec()).map_err(|e| AppError::Internal(e.to_string()))?
+                ),
+                None => return Ok(None),
+            }
+        } else {
+            format!("user:{}", id_or_email)
+        };
+
+        let data = self.db.get(&key).map_err(|e| {
+            metrics::record_db_error("get_user_sled");
+            AppError::Sled(e)
+        })?;
+
+        let user = if let Some(bytes) = data {
+            Some(
+                decode_from_slice::<User, _>(&bytes, config::standard())
+                    .map(|(data, _)| data)
+                    .map_err(|e| AppError::Internal(e.to_string()))?,
+            )
+        } else {
+            None
+        };
+
+        metrics::record_db_latency("get_user_sled", start);
+        Ok(user)
+    }
+
+    async fn count_users(&self) -> Result<u64, AppError> {
+        let start = Instant::now();
+        let count = self
+            .db
+            .scan_prefix("user:")
+            .count()
+            .try_into()
+            .map_err(|e| AppError::Internal(TryFromIntError::to_string()))?;
+        metrics::record_db_latency("count_users_sled", start);
+        Ok(count)
+    }
+
+    async fn count_urls(&self, user_id: Option<&str>) -> Result<u64, AppError> {
+        let start = Instant::now();
+        let is_admin = user_id.is_none();
+        let mut count = 0;
+
+        for entry in self.db.scan_prefix("url:") {
+            let (_, value) = entry.map_err(|e| {
+                metrics::record_db_error("count_urls_sled");
+                AppError::Sled(e)
+            })?;
+
+            let url_data: UrlData = decode_from_slice(&value, config::standard())
+                .map(|(data, _)| data)
+                .map_err(|e| AppError::Internal(e.to_string()))?;
+
+            if is_admin || url_data.user_id.as_deref() == user_id || url_data.user_id.is_none() {
+                count += 1;
+            }
+        }
+
+        metrics::record_db_latency("count_urls_sled", start);
+        Ok(count)
+    }
+
+    async fn blacklist_token(&self, token: &str, expiry_secs: u64) -> Result<(), AppError> {
+        let start = Instant::now();
+        let key = format!("token:{}", token);
+        let expiry = self.clock.now().timestamp() as u64 + expiry_secs;
+        let mut data = vec![1u8]; // Minimal value
+        data.extend_from_slice(expiry.to_le_bytes().as_ref());
+
+        self.db.insert(key, data).map_err(|e| {
+            metrics::record_db_error("blacklist_token_sled");
+            AppError::Sled(e)
+        })?;
+
+        metrics::record_db_latency("blacklist_token_sled", start);
+        Ok(())
+    }
+
+    async fn is_token_blacklisted(&self, token: &str) -> Result<bool, AppError> {
+        let start = Instant::now();
+        let key = format!("token:{}", token);
+        let exists = self.db.get(&key).map_err(|e| {
+            metrics::record_db_error("is_token_blacklisted_sled");
+            AppError::Sled(e)
+        })?.is_some();
+        metrics::record_db_latency("is_token_blacklisted_sled", start);
+        Ok(exists)
     }
 }

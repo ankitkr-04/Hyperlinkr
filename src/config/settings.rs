@@ -6,6 +6,7 @@ use super::analytics::AnalyticsConfig;
 use super::cache::CacheConfig;
 use super::rate_limit::RateLimitConfig;
 use super::codegen::CodeGenConfig;
+use super::security::SecurityConfig;
 
 #[derive(Debug, Deserialize, Validate)]
 pub struct Settings {
@@ -27,6 +28,9 @@ pub struct Settings {
     pub codegen: CodeGenConfig,
     #[validate(nested)]
     pub analytics: AnalyticsConfig,
+
+     #[validate(nested)]
+    pub security: SecurityConfig,
 }
 
 impl Default for Settings {
@@ -46,6 +50,7 @@ impl Default for Settings {
             rate_limit: RateLimitConfig::default(),
             codegen: CodeGenConfig::default(),
             analytics: AnalyticsConfig::default(),
+            security: SecurityConfig::default(),
         }
     }
 }

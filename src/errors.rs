@@ -49,6 +49,9 @@ pub enum AppError {
 
     #[error("Invalid URL: {0}")]
     InvalidUrl(String),
+
+    #[error("Unauthorized access")]
+    Unauthorized(String),
 }
 
 impl IntoResponse for AppError {
@@ -69,6 +72,7 @@ impl IntoResponse for AppError {
             AppError::Expired => (StatusCode::GONE, "URL expired".to_string()),
             AppError::DuplicateAlias(alias) => (StatusCode::CONFLICT, format!("Duplicate alias: {}", alias)),
             AppError::InvalidUrl(msg) => (StatusCode::BAD_REQUEST, msg.to_string()),
+            AppError::Unauthorized(msg) => (StatusCode::UNAUTHORIZED, msg.to_string()),
         };
         (status, message).into_response()
     }
