@@ -7,5 +7,7 @@ pub trait Storage {
     async fn set_ex(&self, key: &str, value: &str, ttl_seconds: u64) -> Result<(), AppError>;
     async fn zadd(&self, key: &str, score: u64, member: u64) -> Result<(), AppError>;
     async fn rate_limit(&self, key: &str, limit: u64, window_secs: i64) -> Result<bool, AppError>;
+    async fn zrange(&self, key: &str, start: i64, end: i64) -> Result<Vec<(u64, u64)>, AppError>;
+    async fn zadd_batch(&self, operations: Vec<(String, u64, u64)>, expire_secs: i64) -> Result<(), AppError>;
     
 }

@@ -178,4 +178,44 @@ impl Storage for DatabaseClient {
         metrics::record_db_latency("rate_limit", start);
         Ok(count < limit as i64)
     }
+
+    async fn zrange(&self, key: &str, start: i64, stop: i64) -> Result<Vec<u64>, AppError> {
+        let start_time = Instant::now();
+        let (node, pool) = self.get_pool().await?;
+        let client = pool.acquire().await;
+        let result: Result<Vec<u64>, Error> = (*client).zrange(key, start, stop, None, false, None, false).await;
+        match result {
+            Ok(data) => {
+                metrics::record_db_latency("zrange", start_time);
+                Ok(data)
+            }
+            Err(e) => {
+                self.circuit_breaker.record_failure(node).await;
+                metrics::record_db_error("zrange");
+                Err(AppError::RedisConnection(e.to_string()))
+            }
+        }
+    }
+
+    async fn zadd_batch(&self, operations: Vec<(String, u64, u64)>, expire_secs: i64) -> Result<(), AppError> {
+        let start = Instant::now();
+        let (node, pool) = self.get_pool().await?;
+        let client = pool.acquire().await;
+        let tx = (*client).multi();
+        for (key, score, member) in operations.iter() {
+            let _ = tx.zadd(key, None, None, false, false, (*score as f64, *member)).await;
+            let _ = tx.expire(key, expire_secs, None).await;
+        }
+        match tx.exec(true).await {
+            Ok(_) => {
+                metrics::record_db_latency("zadd_batch", start);
+                Ok(())
+            }
+            Err(e) => {
+                self.circuit_breaker.record_failure(node).await;
+                metrics::record_db_error("zadd_batch");
+                Err(AppError::RedisConnection(e.to_string()))
+            }
+        }
+    }
 }

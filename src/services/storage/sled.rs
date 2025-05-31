@@ -84,4 +84,36 @@ impl Storage for SledStorage {
 
         Ok(false) // Rate limit exceeded
     }
+
+    async fn zrange(&self, key: &str, start: i64, end: i64) -> Result<Vec<(u64, u64)>, AppError> {
+        let db = self.db.lock().await;
+        let mut results = Vec::new();
+        for entry in db.scan_prefix(key).skip(start as usize).take((end - start + 1) as usize) {
+            match entry {
+                Ok((k, v)) => {
+                    if let Ok(key_str) = std::str::from_utf8(&k) {
+                        if let Some(member_str) = key_str.split(':').last() {
+                            if let Ok(member) = member_str.parse::<u64>() {
+                                if let Ok(bytes) = v.as_ref().try_into() {
+                                    let score = u64::from_le_bytes(bytes);
+                                    results.push((score, member));
+                                }
+                            }
+                        }
+                    }
+                }
+                Err(e) => return Err(AppError::Sled(e)),
+            }
+        }
+        Ok(results)
+    }
+
+    async fn zadd_batch(&self, operations: Vec<(String, u64, u64)>, _expire_secs: i64) -> Result<(), AppError> {
+        let db = self.db.lock().await;
+        for (key, score, member) in operations {
+            db.insert(format!("{}:{}", key, member), score.to_le_bytes().to_vec())
+                .map_err(|e| AppError::Sled(e))?;
+        }
+        Ok(())
+    }
 }

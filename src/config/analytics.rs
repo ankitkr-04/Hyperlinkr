@@ -12,6 +12,9 @@ pub struct AnalyticsConfig {
     pub max_batch_size_ms: u64,
     #[validate(range(min = 1000))]
     pub max_batch_size: usize,
+
+    #[validate(range(min = 1000))]
+    pub max_queue_size: Option<usize>, // Optional, defaults to 100K if not set
 }
 
 impl Default for AnalyticsConfig {
@@ -21,6 +24,7 @@ impl Default for AnalyticsConfig {
             batch_size: 10_000,
             max_batch_size_ms: 1_000,
             max_batch_size: 10_000,
+            max_queue_size: Some(100_000), // Default to 100K
         }
     }
 }

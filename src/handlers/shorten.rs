@@ -1,13 +1,8 @@
-use axum::{
-    extract::{Json, State},
-    response::IntoResponse,
-};
+use axum::{extract::{Json, State}, response::IntoResponse};
 use std::sync::Arc;
 use tracing::info;
 use validator::Validate;
-
 use crate::{
-    clock::{Clock, SystemClock},
     config::settings::Settings,
     errors::AppError,
     services::{
@@ -17,6 +12,7 @@ use crate::{
         storage::dragonfly::DatabaseClient,
     },
     types::{ShortenRequest, ShortenResponse},
+    clock::SystemClock,
 };
 
 #[derive(Clone)]
@@ -45,12 +41,7 @@ pub async fn shorten_handler(
             .to_string(),
     };
 
-    if let Some(expiration) = req.expiration_date {
-        if state.clock.now() > expiration {
-            return Err(AppError::Expired);
-        }
-    }
-
+    // No need to parse expiration_date; validation in types.rs ensures it's valid RFC 3339 and in the future
     if state.cache.contains_key(&code) {
         if let Ok(existing_url) = state.cache.get(&code).await {
             if existing_url == req.url {
@@ -77,7 +68,6 @@ pub async fn shorten_handler(
 }
 
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -89,6 +79,7 @@ mod tests {
     };
     use std::sync::Arc;
     use tower::ServiceExt;
+    use chrono::{Duration, Utc};
 
     use crate::{
         clock::SystemClock,
@@ -128,6 +119,7 @@ mod tests {
             .route("/shorten", post(shorten_handler))
             .with_state(state);
 
+        // Test case 1: No expiration_date
         let request_payload = ShortenRequest {
             url: "https://example.com".to_string(),
             custom_alias: None,
@@ -152,5 +144,33 @@ mod tests {
         let parsed: ShortenResponse = serde_json::from_slice(&body_bytes).unwrap();
         assert!(parsed.short_url.contains("/redirect/"));
         assert_eq!(parsed.expiration_date, None);
+
+        // Test case 2: With valid expiration_date
+        let future_date = (Utc::now() + Duration::days(1)).to_rfc3339();
+        let request_payload = ShortenRequest {
+            url: "https://example.com".to_string(),
+            custom_alias: Some("testAlias".to_string()),
+            expiration_date: Some(future_date.clone()),
+        };
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/shorten")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(serde_json::to_string(&request_payload).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body_bytes = hyper::body::to_bytes(response.into_body()).await.unwrap();
+        let parsed: ShortenResponse = serde_json::from_slice(&body_bytes).unwrap();
+        assert!(parsed.short_url.contains("/redirect/testAlias"));
+        assert_eq!(parsed.code, "testAlias");
+        assert_eq!(parsed.expiration_date, Some(future_date));
     }
 }

@@ -3,26 +3,30 @@ use thiserror::Error;
 use arrayvec::ArrayString;
 use crate::config::settings::Settings;
 use prometheus::{Histogram, IntCounter};
-use lazy_static::lazy_static;
 use tracing::debug;
+use once_cell::sync::Lazy;
+
 
 const BASE62_CHARS: &[u8] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
-
-lazy_static! {
-    static ref CODEGEN_LATENCY: Histogram = prometheus::register_histogram!(
+static CODEGEN_LATENCY: Lazy<Histogram> = Lazy::new(|| {
+    prometheus::register_histogram!(
         "codegen_latency_seconds",
         "Latency of code generation in seconds"
-    ).unwrap();
-    static ref CODEGEN_OVERFLOW_RETRIES: IntCounter = prometheus::register_int_counter!(
+    ).unwrap()
+});
+static CODEGEN_OVERFLOW_RETRIES: Lazy<IntCounter> = Lazy::new(|| {
+    prometheus::register_int_counter!(
         "codegen_overflow_retries_total",
         "Total number of overflow retry attempts"
-    ).unwrap();
-    static ref CODEGEN_SHARD_USAGE: Histogram = prometheus::register_histogram!(
+    ).unwrap()
+});
+static CODEGEN_SHARD_USAGE: Lazy<Histogram> = Lazy::new(|| {
+    prometheus::register_histogram!(
         "codegen_shard_usage",
         "Shard ID usage distribution",
         vec![0.0, 100.0, 500.0, 1000.0, 2000.0, 3000.0, 4000.0]
-    ).unwrap();
-}
+    ).unwrap()
+});
 
 #[derive(Debug, Error)]
 pub enum CodeGenError {
@@ -187,7 +191,7 @@ impl CodeGenerator {
 mod tests {
     use super::*;
     use crate::config::{settings::Settings, codegen::CodeGenConfig};
-
+    
     #[test]
     fn test_code_generation() {
         let config = Settings {

@@ -1,5 +1,5 @@
 environment = "development"
-database_urls = ["redis://dragonfly:6379"]
+database_urls = ["redis://localhost:6379"]
 base_url = "http://localhost:3000"
 app_port = 3000
 rust_log = "debug"

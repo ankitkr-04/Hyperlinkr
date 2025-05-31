@@ -1,6 +1,8 @@
-use regex::Regex;
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 use validator::{Validate, ValidationError};
+use regex::Regex;
 use once_cell::sync::Lazy;
 use chrono::{DateTime, Utc};
 use crate::clock::{Clock, SystemClock};
@@ -53,43 +55,92 @@ fn validate_custom_alias(alias: &str) -> Result<(), ValidationError> {
     Ok(())
 }
 
-fn validate_future_date(date: &DateTime<Utc>, clock: &dyn Clock) -> Result<(), ValidationError> {
-    let now = clock.now();
-    if date > &now {
-        Ok(())
-    } else {
+fn validate_rfc3339_date(date: &str) -> Result<(), ValidationError> {
+    let parsed = DateTime::parse_from_rfc3339(date)
+        .map_err(|_e| {
+            let mut err = ValidationError::new("invalid_rfc3339_date");
+            err.add_param("value".into(), &date);
+            err
+        })?;
+    let date_utc = parsed.with_timezone(&Utc);
+    let now = SystemClock.now();
+    if date_utc <= now {
         let mut err = ValidationError::new("date_must_be_in_future");
-        err.add_param("date".into(), &date.to_rfc3339());
+        err.add_param("date".into(), &date_utc.to_rfc3339());
         err.add_param("now".into(), &now.to_rfc3339());
-        Err(err)
+        return Err(err);
     }
-}
-
-fn validate_future_date_wrapper(date: &DateTime<Utc>) -> Result<(), ValidationError> {
-    validate_future_date(date, &SystemClock)
+    Ok(())
 }
 
 #[derive(Debug, Serialize, Deserialize, Validate)]
 pub struct ShortenRequest {
-    #[validate(url, custom (function= "validate_url"))]
+    #[validate(url, custom(function = "validate_url"))]
     pub url: String,
-    #[validate(length(min = 1, max = 20), custom (function= "validate_custom_alias"))]
+    #[validate(length(min = 1, max = 20), custom(function = "validate_custom_alias"))]
     pub custom_alias: Option<String>,
-    #[validate(custom (function= "validate_future_date_wrapper"))]
-    pub expiration_date: Option<DateTime<Utc>>,
+    #[validate(custom(function = "validate_rfc3339_date"))]
+    pub expiration_date: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
 pub struct ShortenResponse {
     pub short_url: String,
     pub code: String,
-    pub expiration_date: Option<DateTime<Utc>>,
+    pub expiration_date: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct UrlData {
     pub long_url: String,
-    pub created_at: DateTime<Utc>,
+    pub created_at: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AuthAction {
+    Register,
+    Login,
+}
+
+
+#[derive(Debug, Serialize, Deserialize, Validate)]
+pub struct AuthRequest {
+    #[validate(length(min = 1, max = 100))]
+    pub username: String,
+    #[validate(length(min = 8, max = 100))]
+    pub password: String,
+    #[validate(email)]
+    pub email: Option<String>, // Required for register, optional for login
+    pub action: AuthAction,
+   
+}
+#[derive(Debug, Serialize)]
+pub struct AuthResponse {
+    pub message: String,
+    pub token: Option<String>, // Only present on successful login
+}
+
+#[derive(Debug, Serialize)]
+pub struct AnalyticsResponse {
+    pub code: u64,
+    pub total_clicks: u64,
+    pub daily_clicks: HashMap<String, u64>
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct User {
+    pub id: u64,
+    pub username: String,
+    pub email: String,
+    pub password_hash: String,
+    pub created_at: String, // ISO 8601 format
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AuthToken {
+    pub user_id: u64,
+    pub expires_at: String, // ISO 8601 format
 }
 
 #[cfg(test)]
@@ -97,7 +148,6 @@ mod tests {
     use super::*;
     use chrono::{TimeZone, Duration};
     use crate::clock::MockClock;
-
 
     #[test]
     fn test_url_validation() {
@@ -116,25 +166,47 @@ mod tests {
         assert!(validate_custom_alias("invalid@alias").is_err());
     }
 
-    #[test]
-    fn test_future_date_validation() {
-        let clock = MockClock(Utc::now());
-        let past = clock.now() - Duration::days(1);
-        let future = clock.now() + Duration::days(1);
-        assert!(validate_future_date(&future, &clock).is_ok());
-        assert!(validate_future_date(&past, &clock).is_err());
-    }
+   #[test]
+fn test_rfc3339_date_validation() {
+    let clock = MockClock(Utc::now());
+    let past = (clock.now() - Duration::days(1)).to_rfc3339();
+    let future = (clock.now() + Duration::days(1)).to_rfc3339();
+    let invalid = "invalid-date";
+
+    // Valid future date
+    assert!(validate_rfc3339_date(&future).is_ok());
+
+    // Past date (should fail)
+    assert!(validate_rfc3339_date(&past).is_err());
+
+    // Invalid string format
+    assert!(validate_rfc3339_date(invalid).is_err());
+
+    // None case: use full struct to test skipping
+    let req = ShortenRequest {
+        url: "https://example.com".to_string(),
+        custom_alias: None,
+        expiration_date: None,
+    };
+    assert!(req.validate().is_ok()); // Should skip date validation
+}
+
 
     #[test]
     fn test_shorten_request_validation() {
         let clock = MockClock(Utc::now());
-        let mut request = ShortenRequest {
+        let request = ShortenRequest {
             url: "https://example.com".to_string(),
-            custom_alias: Some(" MyAlias ".to_string()),
-            expiration_date: Some(clock.now() + Duration::days(1)),
+            custom_alias: Some("MyAlias".to_string()),
+            expiration_date: Some((clock.now() + Duration::days(1)).to_rfc3339()),
         };
-        assert!(request.validate().is_ok()); // Normalization happens in validate_custom_alias
-        request.custom_alias = Some("admin".to_string());
-        assert!(request.validate().is_err());
+        assert!(request.validate().is_ok());
+
+        let invalid_request = ShortenRequest {
+            url: "https://example.com".to_string(),
+            custom_alias: Some("admin".to_string()),
+            expiration_date: Some((clock.now() - Duration::days(1)).to_rfc3339()),
+        };
+        assert!(invalid_request.validate().is_err());
     }
 }

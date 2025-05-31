@@ -19,6 +19,7 @@ use hyperlinkr::{
 #[tokio::main]
 async fn main() {
     let config = Arc::new(load().expect("Failed to load configuration"));
+    // dbg!(&config);
     tracing_subscriber::fmt::init(); // Must be after load() to use RUST_LOG
 
     let cache = Arc::new(CacheService::new(&config).await);
