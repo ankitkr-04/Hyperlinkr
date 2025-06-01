@@ -49,7 +49,9 @@ rand = '0.9'
 bincode = "2.0.1"
 url = "*"
 cuid = "*"
-
+bcrypt = "*"
+dashmap = "*"
+maxminddb= "*"
 
 [dependencies.xxhash-rust]
 version = "*"

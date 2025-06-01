@@ -369,4 +369,18 @@ impl<C: Clock + Send + Sync> Storage for SledStorage<C> {
         metrics::record_db_latency("scan_keys_sled", start);
         Ok(keys)
     }
+
+    async fn eval_lua(
+        &self,
+        _script: &str,
+        _keys: Vec<String>,
+        _args: Vec<String>,
+    ) -> Result<i64, AppError> {
+        Err(AppError::Internal("Lua scripting not supported in Sled".into()))
+    }
+
+
+    async fn is_global_admin(&self, user_email: &str) -> bool {
+        self.global_admins.iter().any(|admin| admin == user_email)
+    }
 }

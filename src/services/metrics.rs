@@ -20,7 +20,6 @@ pub static QUEUE_LENGTH: OnceCell<IntGauge> = OnceCell::new();
 pub static ANALYTICS_ERRORS: OnceCell<IntCounterVec> = OnceCell::new();
 pub static SHORT_URLS_CREATED: OnceCell<IntCounter> = OnceCell::new();
 pub static REDIRECTS_SERVED: OnceCell<IntCounter> = OnceCell::new();
-
 pub fn init_metrics() {
     CACHE_HITS.set(
         register_int_counter_vec!(

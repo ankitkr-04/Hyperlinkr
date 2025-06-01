@@ -6,7 +6,7 @@ use tracing::info;
 use hyperlinkr::{
     clock::SystemClock,
     config::settings::load,
-    handlers::{metrics::metrics_handler, redirect::redirect_handler, shorten::{shorten_handler, AppState}},
+    handlers::{analytics::metrics_handler, redirect::redirect_handler, shorten::{shorten_handler, AppState}},
     middleware::rate_limit::rate_limit_middleware,
     services::{
         analytics::AnalyticsService,

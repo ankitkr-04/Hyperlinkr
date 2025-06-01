@@ -55,6 +55,12 @@ pub enum AppError {
 
     #[error("Unauthorized access")]
     Unauthorized(String),
+
+    #[error("Conflict in associated resource")]
+    Conflict(String),
+
+    #[error("Forbidden access")]
+    Forbidden(String),
 }
 
 impl IntoResponse for AppError {
@@ -79,6 +85,8 @@ impl IntoResponse for AppError {
             AppError::DuplicateAlias(alias) => (StatusCode::CONFLICT, format!("Duplicate alias: {}", alias)).into_response(),
             AppError::InvalidUrl(msg) => (StatusCode::BAD_REQUEST, msg).into_response(),
             AppError::Unauthorized(msg) => (StatusCode::UNAUTHORIZED, msg).into_response(),
+            AppError::Conflict(msg) => (StatusCode::CONFLICT, msg).into_response(),
+            AppError::Forbidden(msg) => (StatusCode::FORBIDDEN, msg).into_response(),
         }
     }
 }

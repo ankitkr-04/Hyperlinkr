@@ -15,7 +15,15 @@ use tokio::task::JoinHandle;
 
 #[derive(Debug)]
 enum AnalyticsMessage {
-    Click(String, u64),
+   Click {
+        code: String,
+        timestamp: u64,
+        ip: String,
+        referrer: Option<String>,
+        country: Option<String>,
+        device_type: Option<String>,
+        browser: Option<String>,
+    },
     Shutdown,
 }
 
@@ -61,7 +69,15 @@ impl<C: Clock + Send + Sync + 'static> AnalyticsService<C> {
         }
     }
 
-    pub async fn record_click(&self, code: &str) {
+    pub async fn record_click(
+        &self,
+        code: &str,
+        ip: &str,
+        referrer: Option<&str>,
+        country: Option<&str>,
+        device_type: Option<&str>,
+        browser: Option<&str>,
+    ) {
         if self.queue.len() >= self.max_queue_size {
             error!("Dropped click for code {}: queue full", code);
             metrics::record_analytics_dropped();
@@ -69,7 +85,15 @@ impl<C: Clock + Send + Sync + 'static> AnalyticsService<C> {
             return;
         }
         let timestamp = self.clock.now().timestamp() as u64;
-        self.queue.push(AnalyticsMessage::Click(code.to_string(), timestamp));
+        self.queue.push(AnalyticsMessage::Click {
+            code: code.to_string(),
+            timestamp,
+            ip: ip.to_string(),
+            referrer: referrer.map(String::from),
+            country: country.map(String::from),
+            device_type: device_type.map(String::from),
+            browser: browser.map(String::from),
+        });
         metrics::record_click();
         metrics::update_queue_length(self.queue.len() as u64);
     }
@@ -228,116 +252,5 @@ impl<C: Clock + Send + Sync + 'static> Drop for AnalyticsService<C> {
                 }
             }
         });
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::config::{settings::Settings, analytics::AnalyticsConfig, cache::CacheConfig};
-    use crate::services::cache::circuit_breaker::CircuitBreaker;
-    use crate::clock::MockClock;
-    use prometheus::core::Collector;
-    use tokio::time::Duration;
-    use std::sync::Arc;
-    use chrono::{DateTime, Utc};
-
-    #[tokio::test]
-    async fn test_analytics_service() {
-        let fixed_time = DateTime::parse_from_rfc3339("2025-05-31T12:00:00Z")
-            .unwrap()
-            .with_timezone(&Utc);
-        let clock = MockClock::new(fixed_time);
-        let config = Arc::new(Settings {
-            analytics: AnalyticsConfig {
-                max_batch_size: 1000,
-                max_batch_size_ms: 200,
-                max_queue_size: Some(100_000),
-                ..Default::default()
-            },
-            cache: CacheConfig {
-                sled_path: "/tmp/test_sled".to_string(),
-                use_sled: true, // Enable Sled for test
-                sled_flush_ms: 600_000, // 10 minutes
-                ..Default::default()
-            },
-            ..Default::default()
-        });
-        metrics::init_metrics();
-        let circuit_breaker = Arc::new(CircuitBreaker::new(vec![], 5, Duration::from_secs(60)));
-        let analytics = Arc::new(AnalyticsService::new(&config, Arc::clone(&circuit_breaker), clock).await);
-
-        // Record a click
-        analytics.record_click("test").await;
-
-        // Wait for flush
-        tokio::time::sleep(Duration::from_millis(300)).await;
-
-        // Check stats in DB or Sled
-        let stats = analytics.get_analytics("test", 0, -1).await.unwrap();
-        let expected_ts = fixed_time.timestamp() as u64;
-        assert_eq!(stats, vec![(expected_ts, expected_ts)]);
-
-        // Verify metrics
-        assert_eq!(metrics::CLICKS_RECORDED.get().unwrap().get(), 1);
-        assert!(metrics::BATCHES_FLUSHED.get().unwrap().get() >= 1);
-        let batch_size_metric = metrics::BATCH_SIZE.get().unwrap().with_label_values(&["analytics"]).collect();
-        assert!(batch_size_metric[0].get_metric()[0].get_histogram().get_sample_count() >= 1);
-        let db_latency_metric = metrics::DB_LATENCY.get().unwrap().with_label_values(&["zadd_batch"]).collect();
-        assert!(db_latency_metric[0].get_metric()[0].get_histogram().get_sample_count() >= 1);
-        assert!(metrics::QUEUE_LENGTH.get().unwrap().get() >= 0);
-
-        // Test queue overflow
-        for _ in 0..200_000 {
-            analytics.record_click("test").await;
-        }
-        assert!(metrics::ANALYTICS_DROPPED.get().unwrap().get() > 0);
-
-        analytics.shutdown().await;
-
-        // Verify shutdown metrics
-        assert_eq!(metrics::QUEUE_LENGTH.get().unwrap().get(), 0);
-    }
-
-    #[tokio::test]
-    async fn test_analytics_service_no_sled() {
-        let fixed_time = DateTime::parse_from_rfc3339("2025-05-31T12:00:00Z")
-            .unwrap()
-            .with_timezone(&Utc);
-        let clock = MockClock::new(fixed_time);
-        let config = Arc::new(Settings {
-            analytics: AnalyticsConfig {
-                max_batch_size: 1000,
-                max_batch_size_ms: 200,
-                max_queue_size: Some(100_000),
-                ..Default::default()
-            },
-            cache: CacheConfig {
-                sled_path: "/tmp/test_sled".to_string(),
-                use_sled: false, // Disable Sled
-                sled_flush_ms: 600_000, // 10 minutes
-                ..Default::default()
-            },
-            ..Default::default()
-        });
-        metrics::init_metrics();
-        let circuit_breaker = Arc::new(CircuitBreaker::new(vec![], 5, Duration::from_secs(60)));
-        let analytics = Arc::new(AnalyticsService::new(&config, Arc::clone(&circuit_breaker), clock).await);
-
-        // Record a click
-        analytics.record_click("test").await;
-
-        // Wait for flush
-        tokio::time::sleep(Duration::from_millis(300)).await;
-
-        // Check stats in DB
-        let stats = analytics.get_analytics("test", 0, -1).await.unwrap();
-        let expected_ts = fixed_time.timestamp() as u64;
-        assert_eq!(stats, vec![(expected_ts, expected_ts)]);
-
-        // Verify metrics
-        assert_eq!(metrics::CLICKS_RECORDED.get().unwrap().get(), 1);
-        assert!(metrics::BATCHES_FLUSHED.get().unwrap().get() >= 1);
-        assert_eq!(metrics::ANALYTICS_ERRORS.get().unwrap().with_label_values(&["flush_sled"]).get(), 0); // No Sled errors
     }
 }

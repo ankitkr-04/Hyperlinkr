@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use fred::{
     clients::ExclusivePool as FredPool,
-    prelude::{Blocking::Block, Error, KeysInterface, SetsInterface, SortedSetsInterface, TransactionInterface},
+    prelude::{Blocking::Block, Error, KeysInterface, LuaInterface, SetsInterface, SortedSetsInterface, TransactionInterface},
     types::{
         config::{Config, ConnectionConfig, PerformanceConfig, ReconnectPolicy, Server, ServerConfig},
         scan::{ScanResult, ScanType, Scanner}, Expiration
@@ -559,5 +559,32 @@ impl Storage for DatabaseClient {
 
         metrics::record_db_latency("scan_keys_dragonfly", start);
         Ok(keys.into_iter().flatten().collect())
+    }
+
+    async fn eval_lua(
+        &self,
+        script: &str,
+        keys: Vec<String>,
+        args: Vec<String>,
+    ) -> Result<i64, AppError> {
+        let start = Instant::now();
+        let (node, pool) = self.get_pool().await?;
+        let client = pool.acquire().await;
+        let result: i64 = (*client)
+            .eval(script, keys, args)
+            .await
+            .map_err(|e| {
+                futures::executor::block_on(self.circuit_breaker.record_failure(node));
+                AppError::RedisConnection(e.to_string())
+            })?;
+        metrics::record_db_latency("eval_lua_dragonfly", start);
+        Ok(result)
+    }
+
+    async fn is_global_admin(&self, email: &str) -> Result<bool, AppError> {
+        let start = Instant::now();
+        let is_admin = self.global_admins.iter().any(|admin| admin == email);
+        metrics::record_db_latency("is_global_admin_dragonfly", start);
+        Ok(is_admin)
     }
 }

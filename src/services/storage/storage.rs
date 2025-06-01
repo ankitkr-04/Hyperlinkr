@@ -23,4 +23,12 @@ pub trait Storage {
     async fn count_urls(&self, user_id: Option<&str>) -> Result<u64, AppError>;
     async fn blacklist_token(&self, token: &str, expiry_secs: u64) -> Result<(), AppError>;
     async fn is_token_blacklisted(&self, token: &str) -> Result<bool, AppError>;
+    async fn is_global_admin(&self, email: &str) -> Result<bool, AppError>;
+
+    async fn eval_lua(
+        &self,
+        script: &str,
+        keys: Vec<String>,
+        args: Vec<String>,
+    ) -> Result<i64, AppError>;
 }

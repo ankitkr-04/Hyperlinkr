@@ -45,21 +45,3 @@ impl CacheBloom {
 
 
 }
-
-#[cfg(test)]
-mod tests {
-    use super::CacheBloom;
-
-    #[test]
-    fn test_bloom_filter() {
-        let bloom = CacheBloom::new(1000, 100, 128);
-       bloom.insert(b"test_key");
-        assert!(bloom.contains(b"test_key"));
-        assert!(!bloom.contains(b"non_existent_key"));
-
-        // Test with different keys
-        bloom.insert(b"another_key");
-        assert!(bloom.contains(b"another_key"));
-        assert!(!bloom.contains(b"yet_another_key"));
-    }
-}

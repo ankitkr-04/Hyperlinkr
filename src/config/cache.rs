@@ -1,3 +1,5 @@
+// src/config/settings.rs
+
 use serde::Deserialize;
 use validator::Validate;
 
@@ -39,16 +41,34 @@ pub struct CacheConfig {
     pub redis_reconnect_delay_ms: u64,
     #[validate(range(min = 100))]
     pub redis_reconnect_max_delay_ms: u64,
+
     #[validate(length(min = 1))]
     pub sled_path: String,
     #[validate(range(min = 16777216))]
     pub sled_cache_bytes: u64,
-    #[validate(range(min = 60_000, max = 900000))] // 10-15 minutes
+    #[validate(range(min = 60_000, max = 900000))]
     pub sled_flush_ms: u64,
     #[validate(range(min = 1, max = 3600))]
     pub sled_snapshot_ttl_secs: u64,
     pub sled_compression: bool,
-    pub use_sled: bool, // New field to toggle Sled
+    pub use_sled: bool,
+
+    // ─── GEO LOOKUP SETTINGS ─────────────────────────────────────────────────────
+    /// Filesystem path to your GeoIP2 or GeoLite2 MMDB file
+    #[validate(length(min = 1))]
+    pub geoip_mmdb_path: String,
+
+    /// Number of “hot” IP addresses to keep in memory (capacity hint)
+    #[validate(range(min = 1))]
+    pub geo_hot_capacity: usize,
+
+    /// Seconds before a hot entry expires
+    #[validate(range(min = 1))]
+    pub geo_ttl_seconds: u64,
+
+    /// How often (in seconds) to run the hot‐cache eviction sweep
+    #[validate(range(min = 1))]
+    pub geo_evict_interval_secs: u64,
 }
 
 impl Default for CacheConfig {
@@ -72,12 +92,20 @@ impl Default for CacheConfig {
             redis_reconnect_max_attempts: 3,
             redis_reconnect_delay_ms: 100,
             redis_reconnect_max_delay_ms: 500,
+
             sled_path: "/tmp/sled_hyperlinkr".to_string(),
             sled_cache_bytes: 64 * 1024 * 1024, // 64MB
-            sled_flush_ms: 600_000, // 10 minutes
+            sled_flush_ms: 600_000,             // 10 minutes
             sled_snapshot_ttl_secs: 5,
             sled_compression: true,
-            use_sled: true, // Default to disabled
+            use_sled: true,
+
+            // ─── GEO LOOKUP DEFAULTS ───────────────────────────────────────────────
+            geoip_mmdb_path: "/path/to/GeoLite2-City.mmdb".to_string(),
+            geo_hot_capacity: 200_000,       // ~20 MB of RAM for ~200k entries
+            geo_ttl_seconds: 3_600,          // 1 hour TTL
+            geo_evict_interval_secs: 60,     // sweep every minute
         }
     }
 }
+

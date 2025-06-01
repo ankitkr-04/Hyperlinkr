@@ -52,22 +52,6 @@ pub struct AuthResponse {
     pub token: Option<String>, // JWT
 }
 
-#[derive(Debug, Serialize)]
-pub struct AnalyticsRequest {
-    pub code: String, // URL code
-    pub start_date: Option<String>, // ISO 8601
-    pub end_date: Option<String>, // ISO 8601
-}
-
-#[derive(Debug, Serialize)]
-pub struct AnalyticsResponse {
-    pub code: String, // URL code
-    pub total_clicks: u64,
-    pub daily_clicks: HashMap<String, u64>,
-    pub total_urls: Option<u64>, // Admin-only
-    pub total_users: Option<u64>, // Admin-only
-}
-
 #[derive(Debug, Serialize, Deserialize)]
 pub struct User {
     pub id: String, // CUID
@@ -80,6 +64,8 @@ pub struct User {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AuthToken {
     pub user_id: Option<String>, // CUID, None for anonymous
+    pub username: String,
+    pub email: String,
     pub expires_at: String, // ISO 8601
     pub is_admin: bool, // True if email in global_admins
 }
@@ -106,6 +92,66 @@ pub struct ApiResponse<T> {
     pub success: bool,
     pub data: Option<T>,
     pub error: Option<ErrorResponse>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Validate)]
+pub struct DeleteAccountRequest {
+    #[validate(length(min = 8, max = 100))]
+    pub password: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Paginate<T> {
+    pub items: Vec<T>,
+    pub page: u64,
+    pub per_page: u64,
+    pub total_items: u64,
+    pub total_pages: u64,
+}
+
+
+#[derive(Debug, Serialize, Deserialize, Validate)]
+pub struct AnalyticsRequest {
+    #[validate(length(min = 1, max = 20))]
+    pub code: Option<String>, // URL code, None for user-wide analytics
+    #[serde(default)]
+    #[validate(range(min = 1))]
+    pub page: Option<u64>, // Pagination page
+    #[serde(default)]
+    #[validate(range(min = 1, max = 100))]
+    pub per_page: Option<u64>, // Items per page
+    pub filters: Option<AnalyticsFilters>, // Filtering options
+}
+
+#[derive(Debug, Serialize, Deserialize, Validate)]
+pub struct AnalyticsFilters {
+    #[validate(custom(function = "validate_rfc3339_date"))]
+    pub start_date: Option<String>, // ISO 8601
+    #[validate(custom(function = "validate_rfc3339_date"))]
+    pub end_date: Option<String>, // ISO 8601
+    #[validate(length(min = 1))]
+    pub country: Option<String>, // e.g., "US", "IN"
+    #[validate(length(min = 1))]
+    pub referrer: Option<String>, // e.g., "example.com"
+    #[validate(length(min = 1))]
+    pub device_type: Option<String>, // e.g., "desktop", "mobile", "tablet"
+    #[validate(length(min = 1))]
+    pub browser: Option<String>, // e.g., "Chrome", "Firefox", "Safari"
+}
+
+#[derive(Debug, Serialize)]
+pub struct AnalyticsResponse {
+    pub code: Option<String>, // URL code, None for user-wide analytics
+    pub total_clicks: u64, // Total clicks for the URL or all user URLs
+    pub unique_visitors: u64, // Unique IPs
+    pub daily_clicks: HashMap<String, u64>, // Date (YYYY-MM-DD) -> clicks
+    pub referrers: HashMap<String, u64>, // Referrer -> clicks
+    pub countries: HashMap<String, u64>, // Country -> clicks
+    pub device_types: HashMap<String, u64>, // Device type -> clicks
+    pub browsers: HashMap<String, u64>, // Browser -> clicks
+    pub total_urls: u64, // Total URLs created by the user
+    pub total_system_urls: Option<u64>, // Admin-only: total URLs in system
+    pub total_users: Option<u64>, // Admin-only: total registered users
 }
 
 #[derive(Debug, Serialize, Deserialize)]
