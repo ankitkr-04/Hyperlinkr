@@ -4,3 +4,4 @@ pub mod rate_limit;
 pub mod analytics;
 pub mod codegen;
 pub mod security;
+pub mod storage;

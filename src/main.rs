@@ -7,11 +7,12 @@ use hyperlinkr::{
     clock::SystemClock,
     config::settings::load,
     handlers::{analytics::metrics_handler, redirect::redirect_handler, shorten::{shorten_handler, AppState}},
-    middleware::rate_limit::rate_limit_middleware,
+    middleware::{rate_limit::rate_limit_middleware, device_info::device_info_middleware},
     services::{
         analytics::AnalyticsService,
         cache::{cache::CacheService, circuit_breaker::CircuitBreaker},
         codegen::generator::CodeGenerator,
+        geo_lookup,
         storage::dragonfly::DatabaseClient,
     },
 };
@@ -24,6 +25,10 @@ async fn main() {
     let config = Arc::new(load().expect("Failed to load configuration"));
     // dbg!(&config);
     tracing_subscriber::fmt::init(); // Must be after load() to use RUST_LOG
+
+    // Initialize geo lookup service
+    geo_lookup::init_geo_lookup(&config)
+        .expect("Failed to initialize geo lookup service");
 
     let cache = Arc::new(CacheService::new(&config).await);
     let codegen = Arc::new(CodeGenerator::new(&config));
@@ -66,12 +71,14 @@ async fn main() {
         .route("/urls", get(list_urls_handler))
         .route("/shorten", post(shorten_handler))
         .route("/redirect/{code}", get(redirect_handler))
-        .route("/analytics/:code", get(analytics_code_handler))
+        .route("/analytics/{code}", get(analytics_code_handler))
         .route("/metrics", get(metrics_handler));
 
     let app = Router::new()
         .nest("/v1", v1_routes)
+        
         .layer(axum::middleware::from_fn_with_state(state.clone(), rate_limit_middleware))
+        .layer(axum::middleware::from_fn(device_info_middleware))
         .with_state(state);
 
     let addr: SocketAddr = format!("0.0.0.0:{}", config.app_port)

@@ -3,6 +3,7 @@ use sled::{Db, Batch};
 use bincode::{config, decode_from_slice, encode_to_vec};
 use std::sync::Arc;
 use std::time::{Instant, Duration};
+use tracing;
 use crate::{
     config::settings::Settings,
     errors::AppError,
@@ -10,7 +11,7 @@ use crate::{
     types::{Paginate, UrlData, User},
     clock::{Clock, SystemClock},
 };
-use super::storage::Storage;
+use super::storage::storage::Storage;
 
 pub struct SledStorage<C: Clock = SystemClock> {
     db: Arc<Db>,
@@ -21,24 +22,49 @@ pub struct SledStorage<C: Clock = SystemClock> {
 }
 
 impl SledStorage {
-    pub fn new(config: &Settings) -> Self {
-        Self::with_clock(config, SystemClock)
+    pub fn new(path: &str, config: &Settings) -> Self {
+        Self::with_clock(path, config, SystemClock)
+    }
+    
+    // Legacy method for backward compatibility - uses storage.sled_path
+    pub fn new_storage(config: &Settings) -> Self {
+        Self::new(&config.storage.sled_path, config)
     }
 }
 
 impl<C: Clock> SledStorage<C> {
-    pub fn with_clock(config: &Settings, clock: C) -> Self {
+    pub fn with_clock(path: &str, config: &Settings, clock: C) -> Self {
         let sled_config = sled::Config::new()
-            .path(&config.cache.sled_path)
-            .cache_capacity(config.cache.sled_cache_bytes * 2) // Double cache for hot keys
+            .path(path)
+            .cache_capacity((config.storage.sled_cache_bytes * 2) as u64) // Double cache for hot keys
             .use_compression(true)
             .compression_factor(8)
             .flush_every_ms(Some(10)); // Aggressive flush
-        let db = sled_config.open().expect("Failed to open sled database");
+        
+        // Retry opening the database with exponential backoff
+        let db = {
+            let mut attempts = 0;
+            let max_attempts = 5;
+            loop {
+                match sled_config.open() {
+                    Ok(db) => break db,
+                    Err(e) => {
+                        if attempts >= max_attempts {
+                            panic!("Failed to open sled database after {} attempts: {}", max_attempts, e);
+                        }
+                        attempts += 1;
+                        let delay_ms = 100 * (1 << (attempts - 1)); // exponential backoff: 100, 200, 400, 800, 1600ms
+                        tracing::warn!("Failed to open sled database (attempt {}), retrying in {}ms: {}", attempts, delay_ms, e);
+                        std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+                    }
+                }
+            }
+        };
+        
         Self {
             db: Arc::new(db),
             clock,
-            snapshot_ttl: Duration::from_secs(config.cache.sled_snapshot_ttl_secs),
+            snapshot_ttl: Duration::from_secs(config.storage.sled_snapshot_ttl_secs),
             global_admins: config.security.global_admins.clone(),
         }
     }

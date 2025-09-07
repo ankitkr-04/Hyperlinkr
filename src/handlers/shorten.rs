@@ -13,7 +13,8 @@ use crate::{
         cache::cache::CacheService,
         codegen::generator::CodeGenerator,
         storage::{dragonfly::DatabaseClient, storage::Storage},
-    }, types::{ApiResponse, ShortenRequest, ShortenResponse, UrlData, AuthContext, AuthResponse}
+    }, types::{ApiResponse, ShortenRequest, ShortenResponse, UrlData, AuthResponse},
+    middleware::RequestContext,
 };
 
 #[derive(Clone)]
@@ -44,13 +45,13 @@ pub async fn list_urls_handler(
 #[axum::debug_handler]
 pub async fn shorten_handler(
     State(state): State<AppState>,
-    Extension(auth_context): Extension<AuthContext>,
+    Extension(request_context): Extension<RequestContext>,
     Json(req): Json<ShortenRequest>,
 ) -> Result<impl IntoResponse, AppError> {
     req.validate().map_err(AppError::Validation)?;
 
     // Require authentication
-    let user_id = auth_context.user_id.ok_or_else(|| {
+    let user_id = request_context.user_id.ok_or_else(|| {
         AppError::Unauthorized("Authentication required for /v1/shorten".into())
     })?;
 
@@ -115,10 +116,10 @@ pub async fn shorten_handler(
 #[axum::debug_handler]
 pub async fn delete_shorten_handler(
     State(state): State<AppState>,
-    Extension(auth_context): Extension<AuthContext>,
+    Extension(request_context): Extension<RequestContext>,
     Path(code): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
-    let user_id = auth_context.user_id.ok_or_else(|| {
+    let user_id = request_context.user_id.ok_or_else(|| {
         AppError::Unauthorized("Authentication required for /v1/shorten/:code deletion".into())
     })?;
 

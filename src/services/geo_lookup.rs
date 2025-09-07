@@ -12,8 +12,10 @@ use serde::{Deserialize, Serialize};
 use crate::{
     config::settings::Settings,
     errors::AppError,
-    services::{metrics, storage::sled::SledStorage, storage::storage::Storage},
+    services::{metrics, sled::SledStorage, storage::storage::Storage},
 };
+
+
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GeoLocation {
@@ -28,21 +30,19 @@ pub struct GeoLocation {
 
 static GEOIP_READER: OnceCell<Arc<Reader<Vec<u8>>>> = OnceCell::new();
 static HOT_CACHE: OnceCell<Arc<DashMap<IpAddr, (GeoLocation, Instant)>>> = OnceCell::new();
-static SLED_GEO: OnceCell<Arc<SledStorage>> = OnceCell::new();
+static SLED_GEO: OnceCell<Arc<SledStorage>> = OnceCell::new(); // Now uses geo-specific path
 static GEO_TTL: OnceCell<Duration> = OnceCell::new();
 static EVICT_INTERVAL: OnceCell<Duration> = OnceCell::new();
 
 pub fn init_geo_lookup(settings: &Settings) -> Result<(), AppError> {
-    GEOIP_READER.get_or_init(|| {
-        Arc::new(
-            Reader::open_readfile(&settings.cache.geoip_mmdb_path)
-                .map_err(|e| AppError::Internal(format!("Failed to open GeoIP DB: {}", e)))
-                .unwrap(),
-        )
-    });
+    // Try to open the GeoIP database first to ensure it's accessible
+    let reader = Reader::open_readfile(&settings.cache.geoip_mmdb_path)
+        .map_err(|e| AppError::Internal(format!("Failed to open GeoIP DB at '{}': {}", &settings.cache.geoip_mmdb_path, e)))?;
+    
+    GEOIP_READER.get_or_init(|| Arc::new(reader));
 
     HOT_CACHE.get_or_init(|| Arc::new(DashMap::with_capacity(settings.cache.geo_hot_capacity)));
-    SLED_GEO.get_or_init(|| Arc::new(SledStorage::new(settings)));
+    SLED_GEO.get_or_init(|| Arc::new(SledStorage::new(&settings.cache.geo_sled_path, settings))); // Use geo-specific path
     GEO_TTL.get_or_init(|| Duration::from_secs(settings.cache.geo_ttl_seconds));
     EVICT_INTERVAL.get_or_init(|| Duration::from_secs(settings.cache.geo_evict_interval_secs));
 
@@ -79,21 +79,22 @@ pub async fn lookup_geo(ip: IpAddr) -> Result<Option<GeoLocation>, AppError> {
     // 2. Sled storage
     let sled_start = Instant::now();
     let sled = SLED_GEO.get().unwrap();
-    if let Ok(serialized) = sled.get(&ip.to_string()).await {
-        if !serialized.is_empty() {
-            if let Ok(loc) = serde_json::from_str::<GeoLocation>(&serialized) {
-                metrics::record_db_latency("get_geo_sled", sled_start);
-                HOT_CACHE.get().unwrap().insert(ip, (loc.clone(), Instant::now()));
-                metrics::record_cache_hit("geo_sled", start_total);
-                return Ok(Some(loc));
-            } else {
-                tracing::warn!("Failed to deserialize Sled geo data for {}", ip);
+    match sled.as_ref().get(&ip.to_string()).await {
+        Ok(cached_data) => {
+            if let Ok(geo_data) = serde_json::from_str::<GeoLocation>(&cached_data) {
+                // Update hot cache
+                HOT_CACHE.get().unwrap().insert(ip, (geo_data.clone(), Instant::now()));
+                metrics::record_cache_hit("geo_sled", sled_start);
+                return Ok(Some(geo_data));
             }
         }
-        metrics::record_db_latency("get_geo_sled", sled_start);
-    } else {
-        metrics::record_db_latency("get_geo_sled", sled_start);
-        tracing::warn!("Sled get error for geo lookup {}", ip);
+        Err(AppError::NotFound(_)) => {
+            // Key not found in sled, continue to MaxMind lookup
+            metrics::record_cache_miss("geo_sled");
+        }
+        Err(e) => {
+            tracing::warn!("Sled geo lookup error for {}: {}", ip, e);
+        }
     }
 
     // 3. MaxMind lookup
@@ -118,10 +119,11 @@ pub async fn lookup_geo(ip: IpAddr) -> Result<Option<GeoLocation>, AppError> {
 
     // Cache results
     if let Some(ref loc) = geo_opt {
+        // Cache in Sled with TTL
         let sled_set_start = Instant::now();
         if let Ok(serialized) = serde_json::to_string(loc) {
             let ttl_secs = GEO_TTL.get().unwrap().as_secs();
-            if let Err(e) = sled.set_ex(&ip.to_string(), &serialized, ttl_secs).await {
+            if let Err(e) = sled.as_ref().set_ex(&ip.to_string(), &serialized, ttl_secs).await {
                 tracing::warn!("Failed to set Sled geo data for {}: {}", ip, e);
             }
             metrics::record_db_latency("set_geo_sled", sled_set_start);

@@ -15,7 +15,8 @@ use crate::{
             l2_cache::L2Cache,
         },
         metrics,
-        storage::{dragonfly::DatabaseClient, sled::SledStorage, storage::Storage},
+        storage::{dragonfly::DatabaseClient, storage::Storage},
+        sled::SledStorage,
     },
     types::{Paginate, UrlData},
 };
@@ -66,7 +67,7 @@ impl CacheService {
                 .expect("Failed to create DatabaseClient"),
         );
         let sled = if config.cache.use_sled {
-            Some(Arc::new(SledStorage::new(config)))
+            Some(Arc::new(SledStorage::new(&config.cache.sled_path, config)))
         } else {
             None
         };

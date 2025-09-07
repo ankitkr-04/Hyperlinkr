@@ -1,5 +1,5 @@
 environment = "development"
-database_urls = ["redis://dragonfly:6379"]
+database_urls = ["redis://localhost:6379"]
 base_url = "http://localhost:3000"
 app_port = 3000
 rust_log = "debug"
@@ -29,7 +29,8 @@ sled_flush_ms = 300000
 sled_snapshot_ttl_secs = 5
 sled_compression = true
 use_sled = true
-geoip_mmdb_path = "/path/to/GeoLite2-City.mmdb"
+geoip_mmdb_path = "./geo/GeoLite2-City.mmdb"
+geo_sled_path = "./data/geo.sled"
 geo_hot_capacity = 200000
 geo_ttl_seconds = 3600
 geo_evict_interval_secs = 60
@@ -42,11 +43,19 @@ redirect_requests_per_minute = 1_000
 shard_bits = 12
 max_attempts = 5
 
+[storage]
+sled_path = "./data/storage.sled"
+sled_cache_bytes = 67108864
+sled_flush_ms = 300000
+sled_snapshot_ttl_secs = 5
+sled_compression = true
+
 [analytics]
 flush_interval_ms = 200
 batch_size = 10_000
 max_batch_size_ms = 1_000
 max_batch_size = 10_000
+sled_path = "./data/analytics.sled"
 
 [security]
 global_admins = []

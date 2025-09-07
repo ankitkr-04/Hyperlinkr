@@ -13,6 +13,7 @@ WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
 COPY src/ ./src/
 COPY benches/ ./benches/
+COPY geo/ ./geo/
 
 # Build the application in release mode
 RUN cargo build --release

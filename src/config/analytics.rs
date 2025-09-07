@@ -15,6 +15,9 @@ pub struct AnalyticsConfig {
 
     #[validate(range(min = 1000))]
     pub max_queue_size: Option<usize>, // Optional, defaults to 100K if not set
+    
+    #[validate(length(min = 1))]
+    pub sled_path: String,
 }
 
 impl Default for AnalyticsConfig {
@@ -25,6 +28,7 @@ impl Default for AnalyticsConfig {
             max_batch_size_ms: 1_000,
             max_batch_size: 10_000,
             max_queue_size: Some(100_000), // Default to 100K
+            sled_path: "./data/analytics.sled".into(),
         }
     }
 }

@@ -57,6 +57,9 @@ pub struct CacheConfig {
     /// Filesystem path to your GeoIP2 or GeoLite2 MMDB file
     #[validate(length(min = 1))]
     pub geoip_mmdb_path: String,
+    /// Path for geo-specific sled database
+    #[validate(length(min = 1))]
+    pub geo_sled_path: String,
 
     /// Number of “hot” IP addresses to keep in memory (capacity hint)
     #[validate(range(min = 1))]
@@ -102,6 +105,7 @@ impl Default for CacheConfig {
 
             // ─── GEO LOOKUP DEFAULTS ───────────────────────────────────────────────
             geoip_mmdb_path: "/path/to/GeoLite2-City.mmdb".to_string(),
+            geo_sled_path: "./data/geo.sled".to_string(),
             geo_hot_capacity: 200_000,       // ~20 MB of RAM for ~200k entries
             geo_ttl_seconds: 3_600,          // 1 hour TTL
             geo_evict_interval_secs: 60,     // sweep every minute

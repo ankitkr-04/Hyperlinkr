@@ -6,7 +6,7 @@ use crate::config::settings::Settings;
 use crate::services::cache::circuit_breaker::CircuitBreaker;
 use crate::services::metrics;
 use crate::services::storage::dragonfly::DatabaseClient;
-use crate::services::storage::sled::SledStorage;
+use crate::services::sled::SledStorage;
 use crate::services::storage::storage::Storage;
 use crate::errors::AppError;
 use crate::clock::{Clock, SystemClock};
@@ -33,7 +33,7 @@ pub struct AnalyticsService<C: Clock + Send + Sync + 'static = SystemClock> {
     flush_task: Arc<tokio::sync::Mutex<Option<JoinHandle<()>>>>,
     max_queue_size: usize,
     db: Arc<DatabaseClient>,
-    sled: Option<Arc<SledStorage<C>>>, // Optional Sled
+    sled: Option<Arc<SledStorage<C>>>, // Generic Sled service with specific path
     is_shutdown: Arc<AtomicBool>,
     clock: C,
     use_sled: bool,
@@ -47,7 +47,8 @@ impl<C: Clock + Send + Sync + 'static> AnalyticsService<C> {
         let max_queue_size = config.analytics.max_queue_size.unwrap_or(100_000);
         let db = Arc::new(DatabaseClient::new(config, Arc::clone(&circuit_breaker)).await.unwrap());
         let sled = if config.cache.use_sled {
-            Some(Arc::new(SledStorage::with_clock(config, clock.clone())))
+            // Create analytics-specific sled with the analytics path
+            Some(Arc::new(SledStorage::with_clock(&config.analytics.sled_path, config, clock.clone())))
         } else {
             None
         };

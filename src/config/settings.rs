@@ -7,6 +7,7 @@ use super::cache::CacheConfig;
 use super::rate_limit::RateLimitConfig;
 use super::codegen::CodeGenConfig;
 use super::security::SecurityConfig;
+use super::storage::StorageConfig;
 
 #[derive(Debug, Deserialize, Validate)]
 pub struct Settings {
@@ -22,6 +23,8 @@ pub struct Settings {
     pub rust_log: String,
     #[validate(nested)]
     pub cache: CacheConfig,
+    #[validate(nested)]
+    pub storage: StorageConfig,
     #[validate(nested)]
     pub rate_limit: RateLimitConfig,
     #[validate(nested)]
@@ -47,6 +50,7 @@ impl Default for Settings {
             app_port: 3000,
             rust_log: "debug".into(),
             cache: CacheConfig::default(),
+            storage: StorageConfig::default(),
             rate_limit: RateLimitConfig::default(),
             codegen: CodeGenConfig::default(),
             analytics: AnalyticsConfig::default(),
