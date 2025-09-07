@@ -1,125 +1,286 @@
-# ⚡ Hyperlinkr — 1M RPS Rust/Axum URL Shortener
+# ⚡ Hyper## 🚀 Features
 
-**Hyperlinkr** is a blazing-fast, memory-efficient, horizontally-scalable URL shortener built with [Rust](https://www.rust-lang.org/), [Axum](https://github.com/tokio-rs/axum), and [DragonflyDB](https://dragonflydb.io/).
-Optimized for modern hardware, container environments, and edge delivery — achieving **\~900K requests/sec** with <1ms P95 latency on AWS Free Tier (`t2.micro`).
+* 🧐 **Multi-layer caching**: L1 (in-memory) + L2 (Redis-compatible) with Bloom filters
+* ⚙️ **BASE62 encoding** with optimized code generation (416K ops/sec single-thread)
+* 📊 **Real-time analytics** with device detection and geo-location
+* 🔧 **Rate limiting** with IP-based controls
+* 🗄️ **DragonflyDB** as high-performance Redis-compatible storage
+* 📈 **Comprehensive benchmarking** tools included
+* 🐳 **Docker Compose** setup for easy local developmentigh-Performance Rust URL Shortener
 
-> Production-grade. P2P-ready. Built for real-time workloads.
+**Hyperlinkr** is a blazing-fast URL shortener built with [Rust](https://www.rust-lang.org/), [Axum](https://github.com/tokio-rs/axum), and [DragonflyDB](https://dragonflydb.io/).
+Optimized for local development and high-performance testing — achieving **50K RPS** in real-world tests with **416K codegen ops/sec** (single-threaded on i3 8th gen).
+
+> Fast, efficient, and built for learning system design principles.
 
 ---
 
 ## 🚀 Features
 
-* 🧐 **In-memory first**: 99.5% L1 cache hit rate via `moka`
-* ⚙️ **SO\_REUSEPORT + Tokio multi-threading**
-* 🌍 **HTTP/3 (QUIC)** with `h3` crate
-* 📊 **Click analytics** with async batching + pipelined writes
-* 🧘 **Cold persistence** using embedded `sled` DB
-* 📊 **DragonflyDB** as a high-throughput Redis-compatible store
-* 🔐 **Cloudflare + Nginx Unit** for edge routing + DDoS protection
-* 🚀 **Tailscale Mesh + EdgeLens (planned)** for failover P2P routing
-* 📉 **Prometheus + Grafana Cloud** metrics
+* 🧐 **Multi-layer caching**: L1 (in-memory) + L2 (Redis-compatible) with Bloom filters
+* ⚙️ **BASE62 encoding** with optimized code generation (416K ops/sec single-thread)
+* 📊 **Real-time analytics** with device detection and geo-location
+* 🔧 **Rate limiting** with IP-based controls
+* �️ **DragonflyDB** as high-performance Redis-compatible storage
+* � **Comprehensive benchmarking** tools included
+* � **Docker Compose** setup for easy local development
+
+---
+
+## 📦 Quick Start
+
+### Prerequisites
+
+* [Rust (stable)](https://rustup.rs/)
+* [Docker & Docker Compose](https://docs.docker.com/get-docker/)
+
+### 1. Clone and Setup
+
+```bash
+git clone https://github.com/ankitkr-04/hyperlinkr.git
+cd hyperlinkr
+```
+
+### 2. Start Services
+
+```bash
+# Start DragonflyDB
+docker compose up -d dragonfly
+
+# Run the application
+cargo run --release
+```
+
+The server will be available at `http://localhost:3000`
+
+### 3. Test It Out
+
+```bash
+# Shorten a URL
+curl -X POST http://localhost:3000/v1/shorten \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://example.com"}'
+
+# Visit the short URL (get the code from above response)
+curl http://localhost:3000/{short_code}
+```
+
+---
+
+## 📖 API Reference
+
+| Endpoint              | Method | Description                                    |
+| --------------------- | ------ | ---------------------------------------------- |
+| `/v1/shorten`         | `POST` | Create short URL from long URL                |
+| `/{code}`             | `GET`  | Redirect to original URL                      |
+| `/v1/analytics/{code}`| `GET`  | Get click analytics for short URL             |
+| `/health`             | `GET`  | Health check endpoint                         |
+
+### Shorten URL
+
+```bash
+POST /v1/shorten
+Content-Type: application/json
+
+{
+  "url": "https://example.com/very/long/url"
+}
+```
+
+Response:
+```json
+{
+  "short_url": "http://localhost:3000/oH",
+  "original_url": "https://example.com/very/long/url"
+}
+```
+
+---
+
+## 📊 Benchmark Results
+
+**Test Environment**: i3 8th Gen, 8GB RAM, Manjaro Linux
+
+| Component                    | Performance              |
+| ---------------------------- | ------------------------ |
+| **HTTP RPS (Real-world)**    | 50,000 requests/sec     |
+| **Code Generation**          | 416,000 ops/sec (1 core)|
+| **BASE62 Encoding**          | Sub-microsecond latency |
+| **Cache Hit Rate**           | >95% L1 cache hits      |
+| **Memory Usage**             | ~200MB typical          |
+
+### Run Your Own Benchmarks
+
+```bash
+# Code generation benchmark
+cargo bench codegen
+
+# HTTP load testing
+ENVIRONMENT=benchmark cargo run --release
+# Then in another terminal:
+ab -n 10000 -c 100 -p data.json -T application/json http://localhost:3000/v1/shorten
+```
+
+📖 **[Complete Benchmarking Guide →](./BENCHMARKING.md)**
 
 ---
 
 ## 🧱 Architecture
 
 ```txt
-Client
-  ↓
-Cloudflare CDN (Rate Limit, DDoS Protection)
-  ↓
-Nginx Unit (SO_REUSEPORT, HTTP/3)
-  ↓
-Axum Cluster (Tokio Multi-Threaded)
-  ├─ L1 Cache (Moka, 2M entries)
-  ├─ DragonflyDB (Pipelined Redis ops)
-  ├─ Analytics Ring Buffer (200ms flush)
-  └─ Cold Storage (Sled)
+HTTP Request
+     ↓
+Rate Limiter → Device Detection
+     ↓              ↓
+L1 Cache ← → Code Generator (BASE62)
+     ↓              ↓
+L2 Cache ← → DragonflyDB  
+     ↓              ↓
+Analytics ← → Sled Storage (Optional)
 ```
 
-➡ Full architecture: [architecture.md](./docs/architecture.md)
+### Key Components
+
+* **Code Generation**: BASE62 encoding with atomic counter (416K ops/sec)
+* **4-Layer Cache**: L1 (Moka) → Bloom Filter → L2 (Moka) → DragonflyDB → Sled
+* **NUMA-aware**: Optimized memory allocation for multi-core systems
+* **Circuit Breaker**: Fault tolerance for database connections
+* **Rate Limiting**: IP-based with configurable limits
+* **Analytics**: Real-time click tracking with device/geo data
+
+📖 **[Read detailed cache architecture →](./CACHE.md)**
 
 ---
 
-## 📦 Getting Started
+## 🛠️ Configuration
 
-### 1. Clone the Repo
+Edit `config.development.toml` for local settings:
+
+```toml
+app_port = 3000
+base_url = "http://localhost:3000"
+
+[cache]
+l1_capacity = 10000
+l2_capacity = 100000
+ttl_seconds = 3600
+
+[rate_limit]
+requests_per_minute = 100
+burst_size = 10
+```
+
+For benchmarking, use `config.benchmark.toml` with disabled rate limits.
+
+---
+
+## 🔧 Development
+
+### Project Structure
+
+```
+src/
+├── main.rs              # Application entry point
+├── handlers/            # HTTP request handlers
+├── services/            # Business logic (analytics, cache, etc.)
+├── middleware/          # Rate limiting, auth, device detection
+├── config/              # Configuration management
+└── types.rs             # Shared types and structures
+
+benches/
+└── codegen.rs           # Code generation benchmarks
+
+config.*.toml            # Environment-specific configs
+docker-compose.yml       # Local development services
+```
+
+### Running Tests
 
 ```bash
-git clone https://github.com/your-org/hyperlinkr.git
-cd hyperlinkr
+# Unit tests
+cargo test
+
+# Benchmarks
+cargo bench
+
+# With logging
+RUST_LOG=debug cargo run
 ```
 
-### 2. Run Services (Dev Mode)
+---
 
-Make sure you have:
+## 📈 Performance Tips
 
-* [Rust (stable)](https://rustup.rs/)
-* [DragonflyDB](https://docs.dragonflydb.io/docs/quickstart/)
-* [Redis CLI](https://redis.io/docs/ui/cli/)
+1. **Use release builds**: `cargo run --release` for production performance
+2. **Tune cache sizes**: Adjust L1/L2 capacity based on your traffic
+3. **Monitor hit rates**: Check cache performance in logs
+4. **Rate limit tuning**: Balance protection vs. performance
+5. **Connection pooling**: DragonflyDB connection pool optimization
 
+---
+
+---
+
+## 📚 Documentation
+
+### Deep Dive Technical Docs
+- **[Cache Architecture](./CACHE.md)** - Detailed analysis of the 4-layer caching system
+- **[Benchmarking Guide](./BENCHMARKING.md)** - Performance testing and optimization  
+- **[Configuration Reference](./config.development.toml)** - All configuration options
+
+### Key Implementation Details
+- **Multi-layer Caching**: L1 (Moka) → Bloom Filter → L2 (Moka) → DragonflyDB → Sled
+- **NUMA-aware Memory**: Optimized allocation for multi-core systems  
+- **Circuit Breaker**: Fault tolerance for database connections
+- **Sharded Bloom Filters**: 16 shards for better concurrency
+- **Async-first Design**: Built with Tokio for maximum performance
+
+---
+
+## 🤝 Contributing
+
+This project is focused on learning system design and high-performance Rust development. Feel free to experiment with:
+
+* Cache strategies and algorithms
+* Load testing and benchmarking  
+* Database optimization
+* Rate limiting algorithms
+* Performance profiling
+
+### Development Workflow
 ```bash
-# Run DragonflyDB
-docker run -it --rm -p 6379:6379 -m 512mb --name dragonfly \
-  ghcr.io/dragonflydb/dragonfly
+# Run tests
+cargo test
 
-# Run the Rust service
-cargo run
-```
+# Run benchmarks
+cargo bench
 
-➡ The server will be live at `http://localhost:3000`
+# Check formatting
+cargo fmt --check
 
----
-
-## 📖 API Reference
-
-| Endpoint       | Method | Description                                           |
-| -------------- | ------ | ----------------------------------------------------- |
-| `/shorten`     | `POST` | Accepts JSON with a long URL and returns a short code |
-| `/:code`       | `GET`  | Redirects to original URL                             |
-| `/stats/:code` | `GET`  | Click analytics (timestamp, referrer, count, etc.)    |
-
-Request Example:
-
-```json
-POST /shorten
-{
-  "url": "https://example.com"
-}
-```
-
-Response:
-
-```json
-{
-  "short_url": "https://h.link/r3aX9b"
-}
+# Run lints
+cargo clippy
 ```
 
 ---
 
-## 📊 Benchmarks
+## � License
 
-| Metric                 | Value            |
-| ---------------------- | ---------------- |
-| **RPS (2 × t2.micro)** | \~900K           |
-| **Latency (P95)**      | <1ms             |
-| **Memory (per node)**  | \~600MB          |
-| **Redis ops/sec**      | \~1.2M           |
-| **CPU Usage**          | 60–80% (2 vCPUs) |
+MIT © [Ankit Kumar](https://github.com/ankitkr-04)
 
 ---
 
-## 📁 Project Structure
+## 💬 Contact
 
-```
-.
-├── src/
-│   ├── main.rs          # Axum server setup
-│   ├── handlers.rs      # Route logic
-│   ├── storage.rs       # Dragonfly + sled persistence
-│   ├── analytics.rs     # Ring buffer + batch flush
-│   └── cache.rs         # moka L1 cache
+**Ankit Kumar** - System Design & High-Performance Rust
+
+* 📧 Email: [ak0182274@gmail.com](mailto:ak0182274@gmail.com)
+* 💼 LinkedIn: [linkedin.com/in/ankit-kumar-2143412a3](https://www.linkedin.com/in/ankit-kumar-2143412a3/)
+* 🐙 GitHub: [github.com/ankitkr-04](https://github.com/ankitkr-04/)
+
+---
+
+> "Performance is a feature. Optimization is an art." – Hyperlinkr
 ├── docs/
 │   └── architecture.md  # In-depth system breakdown
 ├── Cargo.toml

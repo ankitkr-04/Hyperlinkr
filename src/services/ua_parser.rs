@@ -55,21 +55,22 @@ static OS_DEVICE_FALLBACK: Lazy<HashMap<&str, &str>> = Lazy::new(|| {
 
 /// High-performance UA parser using substring match
 pub fn parse_user_agent(ua: &str) -> UAInfo {
-    let ua = ua.to_lowercase();
+    let ua = ua.as_bytes();
+    
 
     let browser = BROWSER_PATTERNS
         .iter()
-        .find(|(pattern, _)| ua.contains(pattern))
+        .find(|(pattern, _)| ua.windows(pattern.len()).any(|window| window.eq_ignore_ascii_case(pattern.as_bytes())))
         .map(|(_, name)| name.to_string());
 
     let os = OS_PATTERNS
         .iter()
-        .find(|(pattern, _)| ua.contains(pattern))
+        .find(|(pattern, _)| ua.windows(pattern.len()).any(|window| window.eq_ignore_ascii_case(pattern.as_bytes())))
         .map(|(_, name)| name.to_string());
 
     let device_type = DEVICE_PATTERNS
         .iter()
-        .find(|(pattern, _)| ua.contains(pattern))
+        .find(|(pattern, _)| ua.windows(pattern.len()).any(|window| window.eq_ignore_ascii_case(pattern.as_bytes())))
         .map(|(_, kind)| kind.to_string())
         .or_else(|| os.as_ref().and_then(|os| OS_DEVICE_FALLBACK.get(os.as_str()).map(|v| v.to_string())))
         .unwrap_or_else(|| "desktop".to_string());
