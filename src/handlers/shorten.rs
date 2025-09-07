@@ -50,10 +50,8 @@ pub async fn shorten_handler(
 ) -> Result<impl IntoResponse, AppError> {
     req.validate().map_err(AppError::Validation)?;
 
-    // Require authentication
-    let user_id = request_context.user_id.ok_or_else(|| {
-        AppError::Unauthorized("Authentication required for /v1/shorten".into())
-    })?;
+    // Authentication is optional - if user is authenticated, associate URL with them
+    let user_id = request_context.user_id.clone(); // Optional user ID
 
     let code = match req.custom_alias {
         Some(alias) => alias,
@@ -69,7 +67,7 @@ pub async fn shorten_handler(
         if let Ok(existing_data) = state.cache.get(&code).await {
             let existing_url_data: UrlData = serde_json::from_str(&existing_data)
                 .map_err(|e| AppError::Internal(e.to_string()))?;
-            if existing_url_data.long_url == req.url && existing_url_data.user_id.as_ref() == Some(&user_id) {
+            if existing_url_data.long_url == req.url && existing_url_data.user_id == user_id {
                 let short_url = format!("{}/v1/redirect/{}", state.config.base_url, code);
                 return Ok(Json(ApiResponse {
                     success: true,
@@ -89,7 +87,7 @@ pub async fn shorten_handler(
     // Create UrlData
     let url_data = UrlData {
         long_url: req.url.clone(),
-        user_id: Some(user_id.clone()),
+        user_id: user_id.clone(),
         created_at: state.clock.now().to_rfc3339(),
         expires_at: req.expiration_date.clone(),
     };
@@ -100,7 +98,8 @@ pub async fn shorten_handler(
     state.cache.insert(code.clone(), url_data_json).await?;
 
     let short_url = format!("{}/v1/redirect/{}", state.config.base_url, code);
-    info!("Shortened URL: {} -> {} for user {}", req.url, short_url, user_id);
+    let user_display = user_id.as_deref().unwrap_or("anonymous");
+    info!("Shortened URL: {} -> {} for user {}", req.url, short_url, user_display);
 
     Ok(Json(ApiResponse {
         success: true,
