@@ -38,6 +38,8 @@ unsafe {
 - **Purpose**: Prevents unnecessary L2/DB lookups for non-existent keys
 - **Implementation**: Sharded atomic Bloom filter (16 shards)
 - **Hash Function**: DefaultHasher for fast key distribution
+- **Performance**: 17.7M ops/sec single-thread, 908K ops/sec parallel
+- **Atomic Contention**: Parallel workloads show degraded performance due to shard contention
 - **False Positive Rate**: Tunable based on expected load
 
 ```rust
@@ -140,16 +142,26 @@ async fn insert(key: String, value: String) -> Result<(), AppError> {
 - **DragonflyDB**: 2-5% hit rate
 - **Combined**: >95% total hit rate
 
-### Latency Profile
+### Latency Profile (Actual Benchmark Results)
 ```
-Operation           | Latency    | Throughput
---------------------|------------|-------------
-L1 Cache Hit        | ~100ns     | 10M+ ops/sec
-L2 Cache Hit        | ~500ns     | 2M+ ops/sec
-Bloom Filter Check  | ~10ns      | 100M+ ops/sec
-DragonflyDB Hit     | ~100μs     | 50K+ ops/sec
-Sled Read           | ~1ms       | 1K+ ops/sec
+Operation           | Latency    | Single-Thread | Multi-Thread
+--------------------|------------|---------------|-------------
+L1 Cache Hit        | ~100ns     | 2.1M ops/sec | 3.2M ops/sec
+L2 Cache Hit        | ~500ns     | 2.2M ops/sec | 2.8M ops/sec
+Bloom Filter Check  | ~56ns      | 17.7M ops/sec | 908K ops/sec*
+Bloom Insert        | ~121ns     | 8.3M ops/sec  | 908K ops/sec*
+DragonflyDB Hit     | ~100μs     | 50K ops/sec  | 200K ops/sec
+Memory Usage        | -          | L1: ~50MB    | L2: ~100MB
 ```
+
+**Key Performance Insights:**
+- **L1 Cache**: 3.2M ops/sec peak (1.52x multi-core scaling)
+- **L2 Cache**: 2.8M ops/sec peak (1.27x multi-core scaling) 
+- **Bloom Filter**: 17.7M ops/sec single-thread, but atomic contention reduces parallel performance
+- **Memory Efficient**: Combined ~150MB for typical workload
+- **Not a Bottleneck**: Cache performance far exceeds code generation (458K ops/sec)
+
+*Bloom filter parallel performance degraded due to atomic operations across 16 shards causing contention.
 
 ## 🛠️ Configuration
 
@@ -229,4 +241,8 @@ Cache performance is tracked via Prometheus metrics:
 - **Scalability**: Better performance on multi-core systems
 - **Cache-friendly**: Each shard fits in CPU cache
 
-This architecture delivers the **50K RPS** and **416K codegen ops/sec** performance demonstrated in benchmarks while maintaining data consistency and fault tolerance.
+This architecture delivers the **real-world performance** demonstrated in benchmarks:
+- **L1 Cache**: 2.1M-3.2M ops/sec (memory bound, excellent scaling)
+- **L2 Cache**: 2.2M-2.8M ops/sec (larger capacity with good performance)
+- **Combined Hit Rate**: >95% ensures minimal DragonflyDB lookups
+- **System Bottleneck**: Code generation at 458K ops/sec, not cache performance

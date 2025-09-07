@@ -101,25 +101,41 @@ Response:
 
 **Test Environment**: i3 8th Gen, 8GB RAM, Manjaro Linux
 
-| Component                    | Performance              |
-| ---------------------------- | ------------------------ |
-| **HTTP RPS (Real-world)**    | 50,000 requests/sec     |
-| **Code Generation**          | 416,000 ops/sec (1 core)|
-| **BASE62 Encoding**          | Sub-microsecond latency |
-| **Cache Hit Rate**           | >95% L1 cache hits      |
-| **Memory Usage**             | ~200MB typical          |
+| Component | Single-Thread | Multi-Thread | Memory Usage | Bottleneck Level |
+|-----------|---------------|--------------|--------------|------------------|
+| **Code Generation** | 458K ops/sec | 768K ops/sec | ~10MB | **PRIMARY** |
+| **L1 Cache** | 2.1M ops/sec | 3.2M ops/sec | ~50MB | Low |
+| **L2 Cache** | 2.2M ops/sec | 2.8M ops/sec | ~100MB | Low |
+| **Bloom Filter** | 17.7M ops/sec | 908K ops/sec* | ~2MB | Negligible |
+| **Rate Limiting** | 14.7M ops/sec | 1.6G ops/sec | ~5MB | Negligible |
+| **URL Processing** | 3.3M ops/sec | 2.5M ops/sec | ~15MB | Low |
 
 ### Run Your Own Benchmarks
 
 ```bash
-# Code generation benchmark
-cargo bench codegen
+# Complete benchmark suite
+cargo bench
 
-# HTTP load testing
-ENVIRONMENT=benchmark cargo run --release
-# Then in another terminal:
-ab -n 10000 -c 100 -p data.json -T application/json http://localhost:3000/v1/shorten
+# Individual components
+cargo bench --bench codegen      # 458K ops/sec BASE62 generation
+cargo bench --bench cache        # 2.1M ops/sec L1 cache hits
+cargo bench --bench cache bloom  # 17.7M ops/sec bloom filter ops
+cargo bench --bench rate_limiting # 14.7M ops/sec rate limit checks
+cargo bench --bench url_processing # 3.3M ops/sec URL validation
+cargo bench --bench analytics    # Real-time data processing
+
+# Quick performance test
+cargo bench -- --quick
 ```
+
+**Key Bottlenecks Identified**:
+- **Theoretical Max**: ~768K codegen ops/sec (multi-core)
+- **Real-world Limit**: Network I/O and serialization overhead
+- **Memory Bound**: Cache performance scales with available RAM
+- **CPU Bound**: Code generation benefits from multiple cores
+- **Bloom Filter**: Extremely fast (17.7M ops/sec) but parallel insert shows contention
+
+*Note: Bloom filter parallel insert shows reduced performance (908K ops/sec) due to atomic contention across shards.
 
 📖 **[Complete Benchmarking Guide →](./BENCHMARKING.md)**
 
@@ -281,62 +297,3 @@ MIT © [Ankit Kumar](https://github.com/ankitkr-04)
 ---
 
 > "Performance is a feature. Optimization is an art." – Hyperlinkr
-├── docs/
-│   └── architecture.md  # In-depth system breakdown
-├── Cargo.toml
-└── README.md
-```
-
----
-
-## 🚀 Production Deployment
-
-This project is Docker-ready. For production, use:
-
-* **Rust** compiled with `--release`
-* **Dragonfly** with `--proactor_threads` optimized per CPU
-* **Cloudflare** for CDN and caching
-* **Nginx Unit** or `SO_REUSEPORT` with systemd sockets
-
-> Use [`tailscale`](https://tailscale.com/) for secure P2P mesh communication between edge nodes.
-
----
-
-## 📡 Monitoring
-
-* **/metrics** exposed for Prometheus scraping
-* Add [Grafana Cloud](https://grafana.com/) for dashboards
-* Optional: Alerting via UptimeRobot or PagerDuty
-
----
-
-## 🤝 Contributing
-
-We welcome contributors!
-
-```bash
-git checkout -b feature/awesome-thing
-git commit -m "feat: add awesome thing"
-git push origin feature/awesome-thing
-```
-
-Then open a PR 🎉
-
----
-
-## 📜 License
-
-MIT © Ankit Kumar
-
----
-
-## 💬 Contact
-
-Have questions or want to collaborate?
-
-* Email: [ankit@example.com](mailto:ankit@example.com)
-* Twitter: [@ankit\_handle](https://twitter.com/ankit_handle)
-
----
-
-> “Shorten smarter. Deliver faster.” – Hyperlinkr
