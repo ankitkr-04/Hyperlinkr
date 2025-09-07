@@ -1,8 +1,8 @@
-max_width = 80
+max_width = 120
 tab_spaces = 2
 hard_tabs = false
 edition = "2024"
-merge_imports = "Auto"
+merge_imports = true
 reorder_imports = true
 format_strings = true
 wrap_comments = true

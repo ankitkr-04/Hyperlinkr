@@ -1,11 +1,24 @@
 use criterion::{criterion_group, criterion_main, Criterion, BenchmarkId, BatchSize};
 use hyperlinkr::services::cache::{l1_cache::L1Cache, l2_cache::L2Cache};
+use hyperlinkr::services::metrics;
 use tokio::runtime::Runtime;
 use std::sync::Arc;
+use std::sync::Once;
+
+static INIT: Once = Once::new();
+
+fn ensure_metrics_initialized() {
+    INIT.call_once(|| {
+        metrics::init_metrics();
+    });
+}
 
 // ==================== L1 Cache Benchmarks ====================
 
 fn l1_cache_benchmark(c: &mut Criterion) {
+    // Initialize metrics to avoid panics
+    ensure_metrics_initialized();
+    
     let rt = Runtime::new().unwrap();
 
     // GET HIT
@@ -38,6 +51,9 @@ fn l1_cache_benchmark(c: &mut Criterion) {
 // ==================== L2 Cache Benchmarks ====================
 
 fn l2_cache_benchmark(c: &mut Criterion) {
+    // Initialize metrics to avoid panics
+    ensure_metrics_initialized();
+    
     let rt = Runtime::new().unwrap();
 
     // GET HIT
@@ -68,6 +84,9 @@ fn l2_cache_benchmark(c: &mut Criterion) {
 // ==================== Cache Size Comparison ====================
 
 fn cache_size_comparison(c: &mut Criterion) {
+    // Initialize metrics to avoid panics
+    ensure_metrics_initialized();
+    
     let rt = Runtime::new().unwrap();
     let mut group = c.benchmark_group("cache_size_comparison");
 
@@ -103,6 +122,9 @@ fn cache_size_comparison(c: &mut Criterion) {
 // ==================== Concurrent Benchmark ====================
 
 fn concurrent_cache_benchmark(c: &mut Criterion) {
+    // Initialize metrics to avoid panics
+    ensure_metrics_initialized();
+    
     let rt = Runtime::new().unwrap();
     let cache = Arc::new(L1Cache::new(1000, 300));
 
