@@ -1,17 +1,18 @@
+version: '3.8'
+
 services:
-  # DragonflyDB - Redis-compatible in-memory database
   dragonfly:
     image: docker.dragonflydb.io/dragonflydb/dragonfly
     container_name: hyperlinkr-dragonfly
     ports:
-      - "${DRAGONFLY_PORT:-6379}:6379"
+      - "6379:6379"
     volumes:
       - dragonfly_data:/data
     command:
       - dragonfly
       - --bind=0.0.0.0
       - --port=6379
-      - --maxmemory=1250mb
+      - --maxmemory=2048mb
     healthcheck:
       test: ["CMD", "redis-cli", "-p", "6379", "ping"]
       interval: 5s
@@ -22,21 +23,19 @@ services:
     networks:
       - hyperlinkr-network
 
-  # Hyperlinkr Application
   app:
     build: 
       context: .
       dockerfile: Dockerfile
     container_name: hyperlinkr-app
     ports:
-      - "${APP_PORT:-3000}:3000"
+      - "3000:3000"
     environment:
-      - ENVIRONMENT=${ENVIRONMENT:-development}
-      - RUST_LOG=${RUST_LOG:-info}
+      - ENVIRONMENT=benchmark
+      - RUST_LOG=warn
     volumes:
       - app_data:/app/data
-      - ./config.development.toml:/app/config.development.toml:ro
-      - ./config.production.toml:/app/config.production.toml:ro
+      - ./config.benchmark.toml:/app/config.benchmark.toml:ro
     depends_on:
       dragonfly:
         condition: service_healthy
@@ -49,22 +48,6 @@ services:
       timeout: 10s
       retries: 3
       start_period: 30s
-
-  # Optional: Redis Commander for database management
-  redis-commander:
-    image: rediscommander/redis-commander:latest
-    container_name: hyperlinkr-redis-commander
-    environment:
-      - REDIS_HOSTS=dragonfly:dragonfly:6379
-    ports:
-      - "${REDIS_COMMANDER_PORT:-8081}:8081"
-    depends_on:
-      - dragonfly
-    restart: unless-stopped
-    networks:
-      - hyperlinkr-network
-    profiles:
-      - admin
 
 volumes:
   dragonfly_data:

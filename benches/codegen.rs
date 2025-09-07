@@ -1,11 +1,12 @@
 use criterion::{Criterion, criterion_group, criterion_main};
 use hyperlinkr::services::codegen::generator::CodeGenerator;
+use hyperlinkr::config::settings::Settings;
 use std::hint::black_box;
 use std::sync::Arc;
-use tokio::task;
+use std::thread;
 
 pub fn bench_codegen(c: &mut Criterion) {
-    let generator = Arc::new(CodeGenerator::new(config::Settings::default()));
+    let generator = Arc::new(CodeGenerator::new(&Settings::default()));
 
     // Single-threaded benchmark
     c.bench_function("codegen_next_single", |b| {
@@ -16,27 +17,28 @@ pub fn bench_codegen(c: &mut Criterion) {
     });
 
     // Multi-threaded benchmark
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(4)
-        .build()
-        .unwrap();
     c.bench_function("codegen_next_multi", |b| {
-        b.iter(|| {
-            rt.block_on(async {
-                let mut handles = vec![];
-                for _ in 0..4 {
-                    let generator = Arc::clone(&generator);
-                    handles.push(task::spawn(async move {
-                        for _ in 0..100 {
-                            let code = generator.next().unwrap();
-                            black_box(code);
-                        }
-                    }));
-                }
-                for handle in handles {
-                    handle.await.unwrap();
-                }
-            });
+        b.iter_custom(|iters| {
+            let generator = Arc::clone(&generator);
+            let threads = 4;
+            let iters_per_thread = iters / threads;
+
+            let mut handles = Vec::new();
+            for _ in 0..threads {
+                let g = Arc::clone(&generator);
+                handles.push(thread::spawn(move || {
+                    for _ in 0..iters_per_thread {
+                        let code = g.next().unwrap();
+                        black_box(code);
+                    }
+                }));
+            }
+
+            let start = std::time::Instant::now();
+            for h in handles {
+                h.join().unwrap();
+            }
+            start.elapsed()
         });
     });
 }

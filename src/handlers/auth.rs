@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Json, State}, http::{HeaderMap}, response::IntoResponse, routing::post, Router
+    extract::{Json, State}, http::HeaderMap, response::IntoResponse, routing::post, Router
 };
 use bcrypt::{hash, verify, DEFAULT_COST};
 use chrono::Duration;
