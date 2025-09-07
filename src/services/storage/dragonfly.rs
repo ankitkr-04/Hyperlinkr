@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use fred::{
     clients::ExclusivePool as FredPool,
-    prelude::{Blocking::Block, Error, KeysInterface, LuaInterface, SetsInterface, SortedSetsInterface, TransactionInterface},
+    prelude::{Blocking::Block, KeysInterface, LuaInterface, SetsInterface, SortedSetsInterface, TransactionInterface},
     types::{
         config::{Config, ConnectionConfig, PerformanceConfig, ReconnectPolicy, Server, ServerConfig},
         scan::{ScanResult, ScanType, Scanner}, Expiration
@@ -141,7 +141,7 @@ impl Storage for DatabaseClient {
         let start = Instant::now();
         let (node, pool) = self.get_pool_for_key(key)?;
         let client = pool.acquire().await;
-        (*client)
+        let _: () = (*client)
             .set(key, value, Some(Expiration::EX(ttl as i64)), None, false)
             .await
             .map_err(|e| {
@@ -156,7 +156,7 @@ impl Storage for DatabaseClient {
         let start = Instant::now();
         let (node, pool) = self.get_pool_for_key(key)?;
         let client = pool.acquire().await;
-        (*client)
+        let _: () = (*client)
             .zadd(key, None, None, false, false, (score as f64, member))
             .await
             .map_err(|e| {
@@ -174,10 +174,10 @@ impl Storage for DatabaseClient {
         let now_ts = chrono::Utc::now().timestamp();
         let now_u64 = now_ts as u64;
         let tx = (*client).multi();
-        tx.zremrangebyscore::<i64, &str, i64, i64>(key, 0, now_ts - window_secs).await;
-        tx.zcard::<i64, &str>(key).await;
-        tx.zadd::<i64, &str, _>(key, None, None, false, false, (now_ts as f64, now_u64)).await;
-        tx.expire::<i64, &str>(key, window_secs as i64, Some(fred::types::ExpireOptions::LT)).await;
+        let _ = tx.zremrangebyscore::<i64, &str, i64, i64>(key, 0, now_ts - window_secs).await;
+        let _ = tx.zcard::<i64, &str>(key).await;
+        let _ = tx.zadd::<i64, &str, _>(key, None, None, false, false, (now_ts as f64, now_u64)).await;
+        let _ = tx.expire::<i64, &str>(key, window_secs as i64, Some(fred::types::ExpireOptions::LT)).await;
 
         let results: Vec<i64> = tx.exec(false).await.map_err(|e| {
             futures::executor::block_on(self.circuit_breaker.record_failure(node));
@@ -188,12 +188,12 @@ impl Storage for DatabaseClient {
         Ok(count < limit as i64)
     }
 
-    async fn zrange(&self, key: &str, start: i64, stop: i64) -> Result<Vec<u64>, AppError> {
+    async fn zrange(&self, key: &str, start: i64, stop: i64) -> Result<Vec<(u64, u64)>, AppError> {
         let start_time = Instant::now();
         let (node, pool) = self.get_pool_for_key(key)?;
         let client = pool.acquire().await;
-        let result: Vec<u64> = (*client)
-            .zrange(key, start, stop, None, false, None, false)
+        let result: Vec<(u64, u64)> = (*client)
+            .zrange(key, start, stop, None, false, None, true)
             .await
             .map_err(|e| {
                 futures::executor::block_on(self.circuit_breaker.record_failure(node));
@@ -218,10 +218,10 @@ impl Storage for DatabaseClient {
             let client = pool.acquire().await;
             let tx = (*client).multi();
             for (score, member) in ops {
-                tx.zadd(&key, None, None, false, false, (score as f64, member)).await;
+                let _ = tx.zadd::<(), _, _>(&key, None, None, false, false, (score as f64, member)).await;
             }
-            tx.expire(&key, expire_secs, None).await;
-            tx.exec(true).await.map_err(|e| {
+            let _ = tx.expire::<(), _>(&key, expire_secs, None).await;
+            let _: () = tx.exec(true).await.map_err(|e| {
                  futures::executor::block_on(self.circuit_breaker.record_failure(node));
                 AppError::RedisConnection(e.to_string())
             })?;
@@ -253,11 +253,11 @@ impl Storage for DatabaseClient {
             }
 
             let tx = (*client).multi();
-            tx.del(&key).await;
+            let _ = tx.del::<(), _>(&key).await;
             if let Some(ref ikey) = index_key {
-                tx.srem(ikey, code).await;
+                let _ = tx.srem::<(), _, _>(ikey, code).await;
             }
-            tx.exec(true).await.map_err(|e| {
+            let _: () = tx.exec(true).await.map_err(|e| {
                  futures::executor::block_on(self.circuit_breaker.record_failure(node));
                 AppError::RedisConnection(e.to_string())
             })?;
@@ -279,11 +279,11 @@ impl Storage for DatabaseClient {
         let (node, pool) = self.get_pool_for_key(&key)?;
         let client = pool.acquire().await;
         let tx = (*client).multi();
-        tx.set(&key, &data, None, None, false).await;
+        let _ = tx.set::<(), _, _>(&key, &data, None, None, false).await;
         if let Some(ref ikey) = index_key {
-            tx.sadd(ikey, code).await;
+            let _ = tx.sadd::<(), _, _>(ikey, code).await;
         }
-        tx.exec(true).await.map_err(|e| {
+        let _: () = tx.exec(true).await.map_err(|e| {
              futures::executor::block_on(self.circuit_breaker.record_failure(node));
             AppError::RedisConnection(e.to_string())
         })?;
@@ -313,17 +313,17 @@ impl Storage for DatabaseClient {
             let pattern = "url:*".to_string();
             let scan_count = Some(1000u32);
             let mut scanner = (*client).scan(pattern, scan_count, Some(ScanType::String));
-            let mut pipeline = (*client).pipeline();
+            let pipeline = (*client).pipeline();
 
             while let Some(page_result) = scanner.next().await {
                 let scan_page: ScanResult = page_result.map_err(|e| {
                     futures::executor::block_on(self.circuit_breaker.record_failure(node));
                     AppError::RedisConnection(e.to_string())
                 })?;
-                let keys = scan_page.results().unwrap_or_default();
+                let keys = scan_page.results().as_ref().map(|v| v.clone()).unwrap_or_default();
 
                 for key in keys {
-                    pipeline.get(&key).await;
+                    let _ = pipeline.get::<String, _>(&key).await;
                 }
 
                 let results: Vec<Option<String>> = pipeline.all().await.map_err(|e| {
@@ -360,11 +360,11 @@ impl Storage for DatabaseClient {
 
             let start_idx = offset.min(total_items) as usize;
             let end_idx = (offset + per_page).min(total_items) as usize;
-            let mut pipeline = (*client).pipeline();
+            let pipeline = (*client).pipeline();
 
             for code in codes.iter().skip(start_idx).take(end_idx - start_idx) {
                 let key = format!("url:{}", code);
-                pipeline.get(&key).await;
+                let _ = pipeline.get::<String, _>(&key).await;
             }
 
             let results: Vec<Option<String>> = pipeline.all().await.map_err(|e| {
@@ -400,9 +400,9 @@ impl Storage for DatabaseClient {
         let (node, pool) = self.get_pool_for_key(&key)?;
         let client = pool.acquire().await;
         let tx = (*client).multi();
-        tx.set(&key, &data, None, None, false).await;
-        tx.set(&email_key, &user.id, None, None, false).await;
-        tx.exec(true).await.map_err(|e| {
+        let _ = tx.set::<(), _, _>(&key, &data, None, None, false).await;
+        let _ = tx.set::<(), _, _>(&email_key, &user.id, None, None, false).await;
+        let _: () = tx.exec(true).await.map_err(|e| {
              futures::executor::block_on(self.circuit_breaker.record_failure(node));
             AppError::RedisConnection(e.to_string())
         })?;
@@ -458,7 +458,7 @@ impl Storage for DatabaseClient {
                 futures::executor::block_on(self.circuit_breaker.record_failure(node));
                 AppError::RedisConnection(e.to_string())
             })?;
-            count += scan_page.results().unwrap_or_default().len() as u64;
+            count += scan_page.results().as_ref().map(|v| v.len()).unwrap_or(0) as u64;
             if !scan_page.has_more() {
                 break;
             }
@@ -492,7 +492,7 @@ impl Storage for DatabaseClient {
                     futures::executor::block_on(self.circuit_breaker.record_failure(node));
                     AppError::RedisConnection(e.to_string())
                 })?;
-                total += scan_page.results().unwrap_or_default().len() as u64;
+                total += scan_page.results().as_ref().map(|v| v.len()).unwrap_or(0) as u64;
                 if !scan_page.has_more() {
                     break;
                 }
@@ -509,7 +509,7 @@ impl Storage for DatabaseClient {
         let key = format!("token:{}", token);
         let (node, pool) = self.get_pool_for_key(&key)?;
         let client = pool.acquire().await;
-        (*client)
+        let _: () = (*client)
             .set(&key, "1", Some(Expiration::EX(expiry_secs as i64)), None, false)
             .await
             .map_err(|e| {
@@ -548,9 +548,10 @@ impl Storage for DatabaseClient {
             keys.extend(
                 scan_page
                     .results()
+                    .as_ref()
+                    .map(|v| v.iter().map(|k| k.clone().into_string()).collect::<Vec<_>>())
                     .unwrap_or_default()
                     .into_iter()
-                    .map(|k| k.into_string())
             );
             if !scan_page.has_more() {
                 break;

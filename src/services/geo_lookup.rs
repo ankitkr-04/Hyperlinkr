@@ -81,9 +81,9 @@ pub async fn lookup_geo(ip: IpAddr) -> Result<Option<GeoLocation>, AppError> {
     let sled = SLED_GEO.get().unwrap();
     if let Ok(serialized) = sled.get(&ip.to_string()).await {
         if !serialized.is_empty() {
-            if let Ok(loc) = serde_json::from_str(&serialized) {
+            if let Ok(loc) = serde_json::from_str::<GeoLocation>(&serialized) {
                 metrics::record_db_latency("get_geo_sled", sled_start);
-                HOT_CACHE.get().unwrap().insert(ip, (loc, Instant::now()));
+                HOT_CACHE.get().unwrap().insert(ip, (loc.clone(), Instant::now()));
                 metrics::record_cache_hit("geo_sled", start_total);
                 return Ok(Some(loc));
             } else {
@@ -110,9 +110,9 @@ pub async fn lookup_geo(ip: IpAddr) -> Result<Option<GeoLocation>, AppError> {
                 .and_then(|names| names.get("en").cloned())
                 .map(String::from),
             postal_code: record.postal.and_then(|p| p.code).map(String::from),
-            timezone: record.location.and_then(|l| l.time_zone).map(String::from),
-            latitude: record.location.and_then(|l| l.latitude),
-            longitude: record.location.and_then(|l| l.longitude),
+            timezone: record.location.as_ref().and_then(|l| l.time_zone).map(String::from),
+            latitude: record.location.as_ref().and_then(|l| l.latitude),
+            longitude: record.location.as_ref().and_then(|l| l.longitude),
         });
     metrics::record_db_latency("lookup_geo_maxmind", mm_start);
 

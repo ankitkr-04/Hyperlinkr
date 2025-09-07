@@ -26,6 +26,9 @@ pub enum AppError {
     #[error("Sled storage error: {0}")]
     Sled(#[from] sled::Error),
 
+    #[error("GeoIP lookup error: {0}")]
+    GeoLookup(#[from] maxminddb::MaxMindDbError),
+
     #[error("Analytics error: {0}")]
     Analytics(String),
 
@@ -74,10 +77,9 @@ impl IntoResponse for AppError {
             AppError::RedisOperation(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
             AppError::CircuitBreaker(node) => (StatusCode::SERVICE_UNAVAILABLE, format!("Circuit breaker open for node: {}", node)).into_response(),
             AppError::Sled(err) => (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
+            AppError::GeoLookup(err) => (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
             AppError::Analytics(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
             AppError::RateLimitExceeded => (StatusCode::TOO_MANY_REQUESTS, "Rate limit exceeded".to_string()).into_response(),
-
-            AppError::RateLimitExceededWithResponse(resp) => resp,
             AppError::NotFound(msg) => (StatusCode::NOT_FOUND, msg).into_response(),
             AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg).into_response(),
             AppError::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),

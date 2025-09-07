@@ -10,7 +10,6 @@ unsafe impl Sync for AtomicBloomShard {} // You must ensure no race conditions m
 impl AtomicBloomShard {
     pub fn new(bits: usize, expected: usize) -> Self {
         let filter = BloomFilter::with_num_bits(bits)
-            .block_size_512()
             .expected_items(expected);
         Self {
             inner: UnsafeCell::new(filter),

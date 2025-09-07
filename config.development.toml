@@ -1,5 +1,5 @@
 environment = "development"
-database_urls = ["redis://localhost:6379"]
+database_urls = ["redis://dragonfly:6379"]
 base_url = "http://localhost:3000"
 app_port = 3000
 rust_log = "debug"
@@ -23,6 +23,16 @@ redis_connection_timeout_ms = 10000
 redis_reconnect_max_attempts = 3
 redis_reconnect_delay_ms = 100
 redis_reconnect_max_delay_ms = 500
+sled_path = "./data/cache.sled"
+sled_cache_bytes = 67108864
+sled_flush_ms = 300000
+sled_snapshot_ttl_secs = 5
+sled_compression = true
+use_sled = true
+geoip_mmdb_path = "/path/to/GeoLite2-City.mmdb"
+geo_hot_capacity = 200000
+geo_ttl_seconds = 3600
+geo_evict_interval_secs = 60
 
 [rate_limit]
 shorten_requests_per_minute = 10
@@ -37,3 +47,10 @@ flush_interval_ms = 200
 batch_size = 10_000
 max_batch_size_ms = 1_000
 max_batch_size = 10_000
+
+[security]
+global_admins = []
+jwt_secret = "0ecEuxack4XAdudiWTWXT3UocVEFhPZBaE0PhIJk3M3PNIfk5BnM+1WSYb0PaPaDCpApBRCPmrH89wDJNjQdyvkl6rEHoebJbmnYf+GqHA2WM6LqhNG+LCAHke8NFRnnlyHEhvr3KiJpQSKR0yWA8jqENpdLjVury+OknAJvQptoANSdIY8uF0FXU0kHLpnxdJ9HXRdyH0A3NTYX+EP9x8Jo3G5ymweJdLp/KUSHBjJGnAsHZAWlg9bOrqIEjau1VwUdDuFrv7yRMZYLBQsa6MRCZ09eRABl5MvqBMs/B8O3tYwUKeP04GqxwI2k5mk2qgMBPpij/zi5iKhDQ="
+token_expiry_secs = 86400
+domain = "localhost"
+subdomains = ["api"]

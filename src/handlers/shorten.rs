@@ -1,20 +1,19 @@
 use axum::{
-    extract::{Extension, Json, Path, State},
-    response::{IntoResponse, Redirect},
-    routing::{get, post},
-    Router,
+    extract::{Json, Path, State},
+    Extension,
+    response::IntoResponse,
 };
 use serde_json::json;
 use std::sync::Arc;
 use tracing::{info, warn};
 use validator::Validate;
 use crate::{
-    clock::{Clock, SystemClock}, config::settings::Settings, errors::AppError, middleware::rate_limit::{auth_rate_limit_middleware, AuthContext}, services::{
+    clock::{Clock, SystemClock}, config::settings::Settings, errors::AppError, services::{
         analytics::AnalyticsService,
         cache::cache::CacheService,
         codegen::generator::CodeGenerator,
         storage::{dragonfly::DatabaseClient, storage::Storage},
-    }, types::{ApiResponse, ShortenRequest, ShortenResponse, UrlData}
+    }, types::{ApiResponse, ShortenRequest, ShortenResponse, UrlData, AuthContext, AuthResponse}
 };
 
 #[derive(Clone)]
@@ -25,6 +24,21 @@ pub struct AppState {
     pub codegen: Arc<CodeGenerator>,
     pub clock: Arc<SystemClock>,
     pub rl_db: Arc<DatabaseClient>,
+}
+
+#[axum::debug_handler]
+pub async fn list_urls_handler(
+    State(state): State<AppState>,
+) -> Result<impl IntoResponse, AppError> {
+    // Example: fetch all URL codes from cache/storage
+    // Use available cache method for listing URLs (pagination stub: page 1, 100 per page)
+    let urls_page = state.cache.list_urls_cache(None, 1, 100).await.map_err(|e| AppError::Internal(e.to_string()))?;
+    let urls = urls_page.map(|p| p.items).unwrap_or_default();
+    Ok(Json(ApiResponse {
+        success: true,
+        data: Some(json!({"urls": urls})),
+        error: None,
+    }))
 }
 
 #[axum::debug_handler]
@@ -74,9 +88,9 @@ pub async fn shorten_handler(
     // Create UrlData
     let url_data = UrlData {
         long_url: req.url.clone(),
-        user_id: Some(user_id),
+        user_id: Some(user_id.clone()),
         created_at: state.clock.now().to_rfc3339(),
-        expires_at: req.expiration_date,
+        expires_at: req.expiration_date.clone(),
     };
 
     // Store UrlData as JSON
@@ -123,14 +137,15 @@ pub async fn delete_shorten_handler(
             // Delete URL
             state
                 .rl_db
-                .delete_url(&code, Some(&user_id), &auth_context.email.unwrap_or_default())
+                .delete_url(&code, Some(&user_id), "")
                 .await?;
             info!("Deleted URL code {} for user {}", code, user_id);
             Ok(Json(ApiResponse {
                 success: true,
                 data: Some(AuthResponse {
-                    message: "URL deleted successfully".into(),
-                    token: None,
+                    token: String::new(),
+                    user_id: user_id.clone(),
+                    is_admin: false,
                 }),
                 error: None,
             }))

@@ -14,8 +14,9 @@ use tracing::{error, info};
 use tokio::task::JoinHandle;
 
 #[derive(Debug)]
-enum AnalyticsMessage {
-   Click {
+#[allow(dead_code)]
+pub enum AnalyticsMessage {
+    Click {
         code: String,
         timestamp: u64,
         ip: String,
@@ -27,7 +28,7 @@ enum AnalyticsMessage {
     Shutdown,
 }
 
-pub struct AnalyticsService<C: Clock = SystemClock> {
+pub struct AnalyticsService<C: Clock + Send + Sync + 'static = SystemClock> {
     queue: Arc<SegQueue<AnalyticsMessage>>,
     flush_task: Arc<tokio::sync::Mutex<Option<JoinHandle<()>>>>,
     max_queue_size: usize,
@@ -36,6 +37,7 @@ pub struct AnalyticsService<C: Clock = SystemClock> {
     is_shutdown: Arc<AtomicBool>,
     clock: C,
     use_sled: bool,
+    #[allow(dead_code)]
     sled_flush_ms: u64,
 }
 
@@ -160,8 +162,8 @@ impl<C: Clock + Send + Sync + 'static> AnalyticsService<C> {
                 interval.tick().await;
                 while let Some(msg) = queue.pop() {
                     match msg {
-                        AnalyticsMessage::Click(code, ts) => {
-                            batch.push((code, ts));
+                        AnalyticsMessage::Click { code, timestamp, ip: _, referrer: _, country: _, device_type: _, browser: _ } => {
+                            batch.push((code, timestamp));
                             if batch.len() >= batch_size {
                                 Self::flush_batch(&db, &sled, &mut batch, use_sled).await;
                             }
@@ -192,7 +194,7 @@ impl<C: Clock + Send + Sync + 'static> AnalyticsService<C> {
             .collect();
 
         let dragonfly_result = db.zadd_batch(operations.clone(), 90 * 24 * 3600).await;
-        if let Err(e) = dragonfly_result {
+        if let Err(ref e) = dragonfly_result {
             error!("Failed to flush analytics to DragonflyDB: {}", e);
             metrics::record_analytics_error("flush_dragonfly");
         }
@@ -235,8 +237,8 @@ impl<C: Clock + Send + Sync + 'static> Drop for AnalyticsService<C> {
         tokio::spawn(async move {
             let mut batch = Vec::with_capacity(1000);
             while let Some(msg) = queue.pop() {
-                if let AnalyticsMessage::Click(code, ts) = msg {
-                    batch.push((code, ts));
+                if let AnalyticsMessage::Click { code, timestamp, .. } = msg {
+                    batch.push((code, timestamp));
                     if batch.len() >= 1000 {
                         Self::flush_batch(&db, &sled, &mut batch, use_sled).await;
                     }

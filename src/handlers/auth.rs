@@ -1,23 +1,21 @@
 use axum::{
-    extract::{Extension, Json, State}, http::{HeaderValue, HeaderMap}, response::IntoResponse, routing::post, Router
+    extract::{Json, State}, http::{HeaderMap}, response::IntoResponse, routing::post, Router
 };
 use bcrypt::{hash, verify, DEFAULT_COST};
-use chrono::{Duration, Utc};
-use futures::TryFutureExt;
+use chrono::Duration;
 use jsonwebtoken::{encode, EncodingKey, Header};
-use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tracing::{info, warn};
 use cuid::cuid2;
 use validator::Validate;
 
 use crate::{
-    clock::{Clock, SystemClock}, config::settings::Settings, errors::AppError, middleware::rate_limit::{auth_rate_limit_middleware, AuthContext}, services::{
+    clock::{Clock, SystemClock}, config::settings::Settings, errors::AppError, services::{
         analytics::AnalyticsService,
         cache::cache::CacheService,
         codegen::generator::CodeGenerator,
         storage::{dragonfly::DatabaseClient, storage::Storage},
-    }, types::{ApiResponse, AuthAction, AuthResponse, AuthToken, User}
+    }, types::{ApiResponse, AuthAction, AuthResponse, AuthToken, User, AuthRequest, DeleteAccountRequest}
 };
 
 #[derive(Clone)]
@@ -38,7 +36,7 @@ pub fn routes(state: AppState) -> Router {
         .route("/v1/auth/login", post(login_handler))
         .route("/v1/auth/logout", post(logout_handler))
         .route("/v1/auth/delete-account", post(delete_account_handler))
-        .layer(axum::middleware::from_fn_with_state(state.clone(), auth_rate_limit_middleware))
+    // .layer(axum::middleware::from_fn_with_state(state.clone(), auth_rate_limit_middleware))
         .with_state(state)
 }
 
@@ -89,7 +87,7 @@ pub async fn register_handler(
         expires_at: expires_at.to_rfc3339(),
         username: user.username.clone(),
         email: user.email.clone(),
-        is_admin,
+    is_admin,
     };
     let token = encode(
         &Header::default(),
@@ -99,14 +97,15 @@ pub async fn register_handler(
     .map_err(|e| AppError::Internal(e.to_string()))?;
 
     info!("Registered user: {}", user.id);
-    Ok(Json(ApiResponse {
-        success: true,
-        data: Some(AuthResponse {
-            message: "User registered successfully".into(),
-            token: Some(token),
-        }),
-        error: None,
-    }))
+        Ok(Json(ApiResponse {
+            success: true,
+            data: Some(AuthResponse {
+                token,
+                user_id: user.id.clone(),
+                is_admin,
+            }),
+            error: None,
+        }))
 }
 
 #[axum::debug_handler]
@@ -145,7 +144,7 @@ pub async fn login_handler(
         expires_at: expires_at.to_rfc3339(),
         username: user.username.clone(),
         email: user.email.clone(),
-        is_admin,
+    is_admin: false,
     };
     let token = encode(
         &Header::default(),
@@ -155,26 +154,23 @@ pub async fn login_handler(
     .map_err(|e| AppError::Internal(e.to_string()))?;
 
     info!("User logged in: {}", user.id);
-    Ok(Json(ApiResponse {
-        success: true,
-        data: Some(AuthResponse {
-            message: "Login successful".into(),
-            token: Some(token),
-        }),
-        error: None,
-    }))
+        Ok(Json(ApiResponse {
+            success: true,
+            data: Some(AuthResponse {
+                token,
+                user_id: user.id.clone(),
+                is_admin,
+            }),
+            error: None,
+        }))
 }
 
 #[axum::debug_handler]
 pub async fn logout_handler(
     State(state): State<AppState>,
-    Extension(auth_context): Extension<AuthContext>,
+    // Extension(auth_context): Extension<AuthContext>,
     req: axum::http::Request<axum::body::Body>,
 ) -> Result<impl IntoResponse, AppError> {
-    let user_id = auth_context.user_id.ok_or_else(|| {
-        AppError::Unauthorized("Authentication required for logout".into())
-    })?;
-
     // Extract JWT from headers
     let token = req
         .headers()
@@ -187,12 +183,13 @@ pub async fn logout_handler(
     let ttl_secs = state.config.security.token_expiry_secs;
     state.rl_db.blacklist_token(token, ttl_secs).await?;
 
-    info!("User logged out: {}", user_id);
+    info!("User logged out");
     Ok(Json(ApiResponse {
         success: true,
         data: Some(AuthResponse {
-            message: "Logout successful".into(),
-            token: None,
+            token: String::new(),
+            user_id: String::new(),
+            is_admin: false,
         }),
         error: None,
     }))
@@ -201,16 +198,16 @@ pub async fn logout_handler(
 #[axum::debug_handler]
 pub async fn delete_account_handler(
     State(state): State<AppState>,
-    Extension(auth_context): Extension<AuthContext>,
+    // Extension(auth_context): Extension<AuthContext>,
     headers: HeaderMap,
     Json(req): Json<DeleteAccountRequest>,
 ) -> Result<impl IntoResponse, AppError> {
     req.validate().map_err(AppError::Validation)?;
 
-    let user_id = auth_context.user_id.ok_or_else(|| {
-        AppError::Unauthorized("Authentication required for account deletion".into())
-    })?;
+    // Extract user_id from request (if available)
+    let user_id = req.user_id.clone().to_string();
 
+    // Find user by user_id
     let user = state
         .rl_db
         .get_user(&user_id)
@@ -253,8 +250,9 @@ pub async fn delete_account_handler(
     Ok(Json(ApiResponse {
         success: true,
         data: Some(AuthResponse {
-            message: "Account deleted successfully".into(),
-            token: None,
+            token: String::new(),
+            user_id,
+            is_admin: false,
         }),
         error: None,
     }))

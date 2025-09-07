@@ -2,6 +2,9 @@ use axum::{extract::State, response::IntoResponse, http::StatusCode};
 use prometheus::Encoder;
 use crate::handlers::shorten::AppState;
 
+use axum::{extract::Path, Json};
+use crate::types::ApiResponse;
+
 #[axum::debug_handler]
 pub async fn metrics_handler(
     State(_state): State<AppState>,
@@ -10,6 +13,23 @@ pub async fn metrics_handler(
     let mut buffer = vec![];
     encoder.encode(&prometheus::gather(), &mut buffer).unwrap();
     (StatusCode::OK, buffer)
+}
+
+#[axum::debug_handler]
+pub async fn analytics_code_handler(
+    State(state): State<AppState>,
+    Path(code): Path<String>,
+) -> Result<impl IntoResponse, crate::errors::AppError> {
+    // Example: fetch analytics for a given code
+    // Use available analytics method (stub: last 30 days)
+    let now = chrono::Utc::now().timestamp();
+    let thirty_days_ago = now - 30 * 24 * 3600;
+    let analytics = state.analytics.get_analytics(&code, thirty_days_ago, now).await.map_err(|e| crate::errors::AppError::Internal(e.to_string()))?;
+    Ok(Json(ApiResponse {
+        success: true,
+        data: Some(serde_json::json!({"analytics": analytics})),
+        error: None,
+    }))
 }
 
 #[cfg(test)]

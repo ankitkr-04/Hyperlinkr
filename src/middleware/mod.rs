@@ -2,9 +2,8 @@ pub mod rate_limit;
 pub mod device_info;
 pub mod auth;
 
-use serde::{Deserialize, Serialize};
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct RequestContext {
     pub user_id: Option<String>,      // From JWT
     pub email: Option<String>,        // From JWT

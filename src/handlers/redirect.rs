@@ -1,7 +1,7 @@
 use axum::{extract::{Path, State}, response::Redirect};
 use crate::{clock::Clock, errors::AppError, handlers::shorten::AppState};
 use tracing::info;
-use crate::types::{UrlData, ApiResponse};
+use crate::types::UrlData;
 
 #[axum::debug_handler]
 pub async fn redirect_handler(
@@ -21,7 +21,15 @@ pub async fn redirect_handler(
         }
     }
 
-    state.analytics.record_click(&code).await?;
+    // Dummy/default values for required analytics fields
+    state.analytics.record_click(
+        &code,
+        "0.0.0.0", // ip
+        None,        // referrer
+        None,        // country
+        None,        // device_type
+        None         // browser
+    ).await;
     info!("Redirecting code {} to {}", code, url_data.long_url);
     Ok(Redirect::to(&url_data.long_url))
     }

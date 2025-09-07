@@ -1,6 +1,6 @@
 use serde::Deserialize;
 use validator::Validate;
-use crate::validator::{validate_email_list, validate_same_site};
+use crate::validator::validate_email_list;
 
 
 

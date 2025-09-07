@@ -16,6 +16,9 @@ use hyperlinkr::{
     },
 };
 
+use hyperlinkr::handlers::shorten::list_urls_handler;
+use hyperlinkr::handlers::analytics::analytics_code_handler;
+
 #[tokio::main]
 async fn main() {
     let config = Arc::new(load().expect("Failed to load configuration"));
@@ -24,6 +27,8 @@ async fn main() {
 
     let cache = Arc::new(CacheService::new(&config).await);
     let codegen = Arc::new(CodeGenerator::new(&config));
+
+    let clock = Arc::new(SystemClock);
 
     let analytics_cb = Arc::new(CircuitBreaker::new(
         config.database_urls.clone(),
@@ -35,7 +40,7 @@ async fn main() {
             .await
             .expect("Failed to create Analytics DB client"),
     );
-    let analytics = Arc::new(AnalyticsService::new(&config, analytics_cb).await);
+    let analytics = Arc::new(AnalyticsService::new(&config, analytics_cb.clone(), SystemClock).await);
 
     let rl_cb = Arc::new(CircuitBreaker::new(
         config.database_urls.clone(),
@@ -48,8 +53,6 @@ async fn main() {
             .expect("Failed to create Rate-Limit DB client"),
     );
 
-    let clock = Arc::new(SystemClock);
-
     let state = AppState {
         config: Arc::clone(&config),
         cache: Arc::clone(&cache),
@@ -59,10 +62,15 @@ async fn main() {
         clock: Arc::clone(&clock),
     };
 
-    let app = Router::new()
+    let v1_routes = Router::new()
+        .route("/urls", get(list_urls_handler))
         .route("/shorten", post(shorten_handler))
         .route("/redirect/{code}", get(redirect_handler))
-        .route("/metrics", get(metrics_handler))
+        .route("/analytics/:code", get(analytics_code_handler))
+        .route("/metrics", get(metrics_handler));
+
+    let app = Router::new()
+        .nest("/v1", v1_routes)
         .layer(axum::middleware::from_fn_with_state(state.clone(), rate_limit_middleware))
         .with_state(state);
 

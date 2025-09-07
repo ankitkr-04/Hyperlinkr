@@ -27,7 +27,7 @@ jsonwebtoken = "9.3.1"
 tracing = "0.1.41"
 tracing-subscriber = "0.3.19"
 anyhow = "1.0"
-thiserror = "2.0.12"
+thiserror = "2.0.16"
 dotenv = "0.15"
 moka = { version = "0.12.10", features = ["future", "sync"] }
 tower = "0.5.2"
@@ -37,7 +37,7 @@ config = "0.15"
 arrayvec = "0.7.6"
 parking_lot = "0.12.4"
 prometheus = "0.14.0"
-fastbloom ={ version ="0.11.0", features = ["serde"] }
+fastbloom ={ version ="0.14.0", features = ["serde"] }
 futures = "0.3"
 libnuma-sys = {version ="0.0.9", optional = true}
 fred = { version = "10.1.0", features = ["dynamic-pool", "i-all", "transactions"] }
@@ -61,7 +61,7 @@ features = ["xxh3", "const_xxh3"]
 [dev-dependencies]
 tokio-test = "0.4.4"
 test-case = "3.3.1"
-criterion = "0.6.0"
+criterion = "0.7.0"
 reqwest = { version = "0.12.18", features = ["json"] }
 serial_test = "3.2"
 

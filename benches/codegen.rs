@@ -5,7 +5,7 @@ use std::sync::Arc;
 use tokio::task;
 
 pub fn bench_codegen(c: &mut Criterion) {
-    let generator = Arc::new(CodeGenerator::new());
+    let generator = Arc::new(CodeGenerator::new(config::Settings::default()));
 
     // Single-threaded benchmark
     c.bench_function("codegen_next_single", |b| {

@@ -1,6 +1,40 @@
+// Auth context for middleware
+#[derive(Clone, Debug, Default)]
+pub struct AuthContext {
+    pub user_id: Option<String>,
+    pub is_admin: bool,
+}
+
+// Auth request payload
+#[derive(Clone, Debug, Deserialize, Serialize, Validate)]
+pub struct AuthRequest {
+    #[validate(length(min = 1, max = 100))]
+    pub username: String,
+    #[validate(length(min = 8, max = 100))]
+    pub password: String,
+    #[validate(email)]
+    pub email: Option<String>,
+    pub action: AuthAction,
+}
+
+// Auth response payload
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct AuthResponse {
+    pub token: String,
+    pub user_id: String,
+    pub is_admin: bool,
+}
+
+// Delete account request
+#[derive(Clone, Debug, Deserialize, Serialize, Validate)]
+pub struct DeleteAccountRequest {
+    pub user_id: String,
+    #[validate(length(min = 8, max = 100))]
+    pub password: String,
+}
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use validator::{Validate, ValidationError};
+use validator::Validate;
 use crate::validator::{validate_url, validate_custom_alias, validate_rfc3339_date};
 
 #[derive(Debug, Serialize, Deserialize, Validate)]
@@ -20,39 +54,23 @@ pub struct ShortenResponse {
     pub expiration_date: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, bincode::Encode, bincode::Decode)]
 pub struct UrlData {
     pub long_url: String,
     pub user_id: Option<String>, // CUID, None for anonymous
     pub created_at: String, // ISO 8601
     pub expires_at: Option<String>, // ISO 8601
 }
-
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, bincode::Encode, bincode::Decode)]
 #[serde(rename_all = "lowercase")]
 pub enum AuthAction {
     Register,
     Login,
 }
 
-#[derive(Debug, Serialize, Deserialize, Validate)]
-pub struct AuthRequest {
-    #[validate(length(min = 1, max = 100))]
-    pub username: String,
-    #[validate(length(min = 8, max = 100))]
-    pub password: String,
-    #[validate(email)]
-    pub email: Option<String>,
-    pub action: AuthAction,
-}
 
-#[derive(Debug, Serialize)]
-pub struct AuthResponse {
-    pub message: String,
-    pub token: Option<String>, // JWT
-}
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, bincode::Encode, bincode::Decode)]
 pub struct User {
     pub id: String, // CUID
     pub username: String,
@@ -60,8 +78,7 @@ pub struct User {
     pub password_hash: String,
     pub created_at: String, // ISO 8601
 }
-
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, bincode::Encode, bincode::Decode)]
 pub struct AuthToken {
     pub user_id: Option<String>, // CUID, None for anonymous
     pub username: String,
@@ -94,20 +111,9 @@ pub struct ApiResponse<T> {
     pub error: Option<ErrorResponse>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Validate)]
-pub struct DeleteAccountRequest {
-    #[validate(length(min = 8, max = 100))]
-    pub password: String,
-}
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct Paginate<T> {
-    pub items: Vec<T>,
-    pub page: u64,
-    pub per_page: u64,
-    pub total_items: u64,
-    pub total_pages: u64,
-}
+
+
 
 
 #[derive(Debug, Serialize, Deserialize, Validate)]

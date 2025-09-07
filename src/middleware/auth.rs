@@ -1,6 +1,6 @@
 use axum::{
-    extract::{State, Extension},
-    http::{header, Request, Response, StatusCode},
+    extract::State,
+    http::{header, Request, Response},
     middleware::Next,
 };
 use once_cell::sync::OnceCell;

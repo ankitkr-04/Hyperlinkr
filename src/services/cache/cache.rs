@@ -121,13 +121,21 @@ impl CacheService {
             metrics::record_cache_hit("dragonfly", start);
             let key = key.to_string();
             let val_clone = val.clone();
-            let l1_task = async move {
-            self.l1.insert(key.clone(), val_clone.clone()).await;
-            Ok::<(), AppError>(())
+            let l1_task = {
+                let key = key.clone();
+                let val_clone = val_clone.clone();
+                async move {
+                    self.l1.insert(key, val_clone).await;
+                    Ok::<(), AppError>(())
+                }
             };
-            let l2_task = async move {
-                self.l2.insert(key, val_clone).await;
-                Ok::<(), AppError>(())
+            let l2_task = {
+                let key = key.clone();
+                let val_clone = val_clone.clone();
+                async move {
+                    self.l2.insert(key, val_clone).await;
+                    Ok::<(), AppError>(())
+                }
             };
             
 
@@ -147,17 +155,28 @@ impl CacheService {
                 let key = key.to_string();
                 let url_clone = url.clone();
                 let dragonfly_task = self.dragonfly.set_ex(&key, &url_clone, self.ttl_seconds);
-                let l1_task = async move {
-                    self.l1.insert(key.clone(), url_clone.clone()).await;
-                    Ok::<(), AppError>(())
+                let l1_task = {
+                    let key = key.clone();
+                    let url_clone = url_clone.clone();
+                    async move {
+                        self.l1.insert(key, url_clone).await;
+                        Ok::<(), AppError>(())
+                    }
                 };
-                let l2_task = async move {
-                    self.l2.insert(key.clone(), url_clone).await;
-                    Ok::<(), AppError>(())
+                let l2_task = {
+                    let key = key.clone();
+                    let url_clone = url_clone.clone();
+                    async move {
+                        self.l2.insert(key, url_clone).await;
+                        Ok::<(), AppError>(())
+                    }
                 };
-                let bloom_task = async move {
-                    self.bloom.insert(key.as_bytes());
-                    Ok::<(), AppError>(())
+                let bloom_task = {
+                    let key = key.clone();
+                    async move {
+                        self.bloom.insert(key.as_bytes());
+                        Ok::<(), AppError>(())
+                    }
                 };
 
                 let tasks: Vec<Pin<Box<dyn Future<Output = Result<(), AppError>> + Send>>> = vec![
@@ -179,17 +198,28 @@ impl CacheService {
         let start = Instant::now();
         self.dragonfly.set_ex(&key, &value, self.ttl_seconds).await?;
         let value_clone = value.clone();
-        let l1_task = async move {
-            self.l1.insert(key.clone(), value_clone.clone()).await;
-            Ok::<(), AppError>(())
+        let l1_task = {
+            let key = key.clone();
+            let value_clone = value_clone.clone();
+            async move {
+                self.l1.insert(key, value_clone).await;
+                Ok::<(), AppError>(())
+            }
         };
-        let l2_task = async move {
-            self.l2.insert(key.clone(), value_clone).await;
-            Ok::<(), AppError>(())
+        let l2_task = {
+            let key = key.clone();
+            let value_clone = value_clone.clone();
+            async move {
+                self.l2.insert(key, value_clone).await;
+                Ok::<(), AppError>(())
+            }
         };
-        let bloom_task = async move {
-            self.bloom.insert(key.as_bytes());
-            Ok::<(), AppError>(())
+        let bloom_task = {
+            let key = key.clone();
+            async move {
+                self.bloom.insert(key.as_bytes());
+                Ok::<(), AppError>(())
+            }
         };
 
         let mut tasks: Vec<Pin<Box<dyn Future<Output = Result<(), AppError>> + Send>>> = vec![
@@ -300,6 +330,7 @@ impl CacheService {
                     let l2 = Arc::clone(&l2);
                     let bloom = Arc::clone(&bloom);
                     let dragonfly = Arc::clone(&dragonfly);
+                    let sled = sled.clone();
                     let key = key.clone();
                     async move {
                         let op_start = Instant::now();

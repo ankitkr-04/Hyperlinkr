@@ -139,6 +139,12 @@ pub fn record_cache_miss(layer: &'static str) {
     }
 }
 
+pub fn record_cache_eviction(layer: &'static str, count: u64) {
+    if let Some(counter) = CACHE_MISSES.get() {
+        counter.with_label_values(&[layer]).inc_by(count);
+    }
+}
+
 pub fn record_cache_latency(layer: &'static str, start: Instant) {
     if let Some(hist) = CACHE_LATENCY.get() {
         let elapsed = start.elapsed().as_secs_f64();

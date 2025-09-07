@@ -1,7 +1,9 @@
 /target
 docs/
 /docs/
-
+/.idea/
+.idea
+.idea/*
 .env
 .env.*
 !.env.example

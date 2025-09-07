@@ -1,6 +1,8 @@
 services:
+  # DragonflyDB - Redis-compatible in-memory database
   dragonfly:
     image: docker.dragonflydb.io/dragonflydb/dragonfly
+    container_name: hyperlinkr-dragonfly
     ports:
       - "${DRAGONFLY_PORT:-6379}:6379"
     volumes:
@@ -9,7 +11,7 @@ services:
       - dragonfly
       - --maxmemory=${DRAGONFLY_MAXMEMORY:-1250mb}
       - --cache_mode=${DRAGONFLY_CACHE_MODE:-true}
-      - --snapshot_cron=${DRAGONFLY_SNAPSHOT_CRON:-* * * * *}
+      - --snapshot_cron=${DRAGONFLY_SNAPSHOT_CRON:-0 */10 * * *}
       - --nodf_snapshot_format
       - --dbfilename=${DRAGONFLY_DBFILENAME:-dump.df}
       - --bind=${DRAGONFLY_BIND:-0.0.0.0}
@@ -19,18 +21,62 @@ services:
       test: ["CMD", "redis-cli", "-p", "6379", "ping"]
       interval: 5s
       timeout: 2s
-      retries: 3
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - hyperlinkr-network
 
+  # Hyperlinkr Application
   app:
-    build: .
+    build: 
+      context: .
+      dockerfile: Dockerfile
+    container_name: hyperlinkr-app
     ports:
       - "${APP_PORT:-3000}:3000"
     environment:
       - ENVIRONMENT=${ENVIRONMENT:-development}
-      - COMPOSE_BAKE=${COMPOSE_BAKE:-true}
+      - RUST_LOG=${RUST_LOG:-info}
+    volumes:
+      - app_data:/app/data
+      - ./config.development.toml:/app/config.development.toml:ro
+      - ./config.production.toml:/app/config.production.toml:ro
     depends_on:
       dragonfly:
         condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - hyperlinkr-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # Optional: Redis Commander for database management
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: hyperlinkr-redis-commander
+    environment:
+      - REDIS_HOSTS=dragonfly:dragonfly:6379
+    ports:
+      - "${REDIS_COMMANDER_PORT:-8081}:8081"
+    depends_on:
+      - dragonfly
+    restart: unless-stopped
+    networks:
+      - hyperlinkr-network
+    profiles:
+      - admin
 
 volumes:
   dragonfly_data:
+    driver: local
+  app_data:
+    driver: local
+
+networks:
+  hyperlinkr-network:
+    driver: bridge

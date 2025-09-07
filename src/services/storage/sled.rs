@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use sled::{Db, Batch, IVec};
+use sled::{Db, Batch};
 use bincode::{config, decode_from_slice, encode_to_vec};
 use std::sync::Arc;
 use std::time::{Instant, Duration};
@@ -15,6 +15,7 @@ use super::storage::Storage;
 pub struct SledStorage<C: Clock = SystemClock> {
     db: Arc<Db>,
     clock: C,
+    #[allow(dead_code)]
     snapshot_ttl: Duration,
     global_admins: Vec<String>,
 }
@@ -200,7 +201,7 @@ impl<C: Clock + Send + Sync> Storage for SledStorage<C> {
                 return Err(AppError::Unauthorized("Not authorized to delete this URL".into()));
             }
 
-            batch.remove(&key);
+            batch.remove(key.as_str());
             if let Some(uid) = user_id {
                 batch.remove(Self::url_index_key(uid, code));
             }
@@ -219,7 +220,7 @@ impl<C: Clock + Send + Sync> Storage for SledStorage<C> {
         let data = encode_to_vec(url_data, config::standard().with_variable_int_encoding())
             .map_err(|e| AppError::Internal(e.to_string()))?;
         let mut batch = Batch::default();
-        batch.insert(&key, data);
+        batch.insert(key.as_str(), data);
         if let Some(user_id) = &url_data.user_id {
             batch.insert(Self::url_index_key(user_id, code), vec![1u8]);
         }
@@ -239,7 +240,7 @@ impl<C: Clock + Send + Sync> Storage for SledStorage<C> {
 
         if is_admin {
             for entry in self.db.scan_prefix("url:") {
-                let (key, value) = entry.map_err(|e| AppError::Sled(e))?;
+                let (_key, value) = entry.map_err(|e| AppError::Sled(e))?;
                 let url_data: UrlData = decode_from_slice(&value, config::standard())
                     .map(|(data, _)| data)
                     .map_err(|e| AppError::Internal(e.to_string()))?;
@@ -290,9 +291,9 @@ impl<C: Clock + Send + Sync> Storage for SledStorage<C> {
         let key = format!("user:{}", user.id);
         let email_key = format!("user_email:{}", user.email);
         let mut batch = Batch::default();
-        batch.insert(&key, encode_to_vec(user, config::standard().with_variable_int_encoding())
+        batch.insert(key.as_str(), encode_to_vec(user, config::standard().with_variable_int_encoding())
             .map_err(|e| AppError::Internal(e.to_string()))?);
-        batch.insert(&email_key, user.id.as_bytes());
+        batch.insert(email_key.as_str(), user.id.as_bytes());
         self.db.apply_batch(batch).map_err(|e| AppError::Sled(e))?;
         metrics::record_db_latency("set_user_sled", start);
         Ok(())
@@ -302,13 +303,19 @@ impl<C: Clock + Send + Sync> Storage for SledStorage<C> {
         let start = Instant::now();
         let key = if id_or_email.contains('@') {
             let email_key = format!("user_email:{}", id_or_email);
-            self.db.get(&email_key).map_err(|e| AppError::Sled(e))?
-                .map(|id_bytes| format!("user:{}", String::from_utf8(id_bytes.to_vec())
-                    .map_err(|e| AppError::Internal(e.to_string()))?))
-                .unwrap_or_default()
+            let result = self.db.get(&email_key).map_err(|e| AppError::Sled(e))?;
+            match result {
+                Some(id_bytes) => {
+                    match String::from_utf8(id_bytes.to_vec()) {
+                        Ok(s) => Ok(format!("user:{}", s)),
+                        Err(e) => Err(AppError::Internal(e.to_string())),
+                    }
+                }
+                None => return Ok(None),
+            }
         } else {
-            format!("user:{}", id_or_email)
-        };
+            Ok(format!("user:{}", id_or_email))
+        }?;
 
         let user = self.db.get(&key).map_err(|e| AppError::Sled(e))?
             .map(|bytes| decode_from_slice::<User, _>(&bytes, config::standard())
@@ -380,7 +387,7 @@ impl<C: Clock + Send + Sync> Storage for SledStorage<C> {
     }
 
 
-    async fn is_global_admin(&self, user_email: &str) -> bool {
-        self.global_admins.iter().any(|admin| admin == user_email)
+    async fn is_global_admin(&self, user_email: &str) -> Result<bool, AppError> {
+        Ok(self.global_admins.iter().any(|admin| admin == user_email))
     }
 }
